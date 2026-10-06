@@ -1,3 +1,59 @@
+// MARK: - Binary contract (echo-binary-contract-v1)
+
+/// Diagnostic tokens that must follow "Invalid arguments: " on stderr.
+package enum CECArgumentToken {
+  package static let protocolOption = "protocol-option"
+  package static let invalidNumber = "invalid-number"
+  package static let outOfRange = "out-of-range"
+  package static let unknownSwitch = "unknown-switch"
+}
+
+/// Which protocol a switch belongs to; a switch used with the wrong one is a usage error.
+package enum CECSwitchScope { case both, tcpOnly, udpOnly }
+
+/// One value switch: its name, the range it accepts and the protocol it applies to.
+package struct CECSwitch {
+  package let name: String
+  package let minimum: UInt64
+  package let maximum: UInt64
+  package let scope: CECSwitchScope
+}
+
+/// The accepted value switches, as value data: one place for names, ranges and protocol scope.
+package enum CECSwitchTable {
+  package static let valueSwitches: [CECSwitch] = [
+    CECSwitch(name: "r", minimum: 1, maximum: 65_535, scope: .both),
+    CECSwitch(name: "l", minimum: 0, maximum: 65_535, scope: .both),
+    CECSwitch(name: "n", minimum: 0, maximum: UInt64.max, scope: .both),
+    CECSwitch(name: "t", minimum: 1, maximum: UInt64(UInt32.max), scope: .both),
+    CECSwitch(name: "i", minimum: 0, maximum: UInt64(UInt32.max), scope: .both),
+    CECSwitch(name: "b", minimum: 0, maximum: UInt64(Int32.max), scope: .both),
+    CECSwitch(name: "k", minimum: 1, maximum: 65_536, scope: .tcpOnly),
+    CECSwitch(name: "z", minimum: 1, maximum: CECConstants.maximumTCPBatchBytes, scope: .both),
+    CECSwitch(name: "zt", minimum: 1, maximum: CECConstants.maximumTCPBatchBytes, scope: .both),
+    CECSwitch(name: "w", minimum: 1, maximum: UInt64(UInt32.max), scope: .both),
+    CECSwitch(name: "rc", minimum: 0, maximum: UInt64(Int32.max), scope: .both),
+    CECSwitch(name: "report", minimum: 1, maximum: UInt64(UInt32.max), scope: .both),
+    CECSwitch(name: "c", minimum: 1, maximum: 1_048_576, scope: .both),
+    CECSwitch(name: "threads", minimum: 1, maximum: 64, scope: .both),
+    CECSwitch(name: "cq", minimum: 64, maximum: 1_048_576, scope: .both),
+    CECSwitch(name: "memory", minimum: 1_048_576, maximum: UInt64.max, scope: .both),
+  ]
+
+  package static func lookup(_ name: String) -> CECSwitch? {
+    valueSwitches.first { $0.name == name }
+  }
+}
+
+/// The usage text: stdout for a valid /h, stderr for a usage error.
+package let cecUsageText = """
+Usage: swift-echo-client target /p tcp|udp [/r port] [/l port] [/n count]
+       [/t seconds] [/i ms] [/d text | /z bytes | /zt bytes] [/k tcp-depth]
+       [/c sessions] [/threads workers] [/w seconds] [/rc [seconds]]
+       [/report seconds] [/b bytes] [/cq capacity] [/memory bytes] [/q] [/stats]
+Data I/O is always RIO; CQ notification is always IOCP. No fallback backend exists.
+
+"""
 package func cecCheckedProduct(_ a: UInt64, _ b: UInt64) -> UInt64? {
   let (value, overflow) = a.multipliedReportingOverflow(by: b)
   return overflow ? nil : value
@@ -44,11 +100,11 @@ private func numeric(_ value: [UInt16]) throws(CECArgumentError) -> UInt64 {
   var result: UInt64 = 0
   for char in value {
     guard (48...57).contains(char), let product = cecCheckedProduct(result, 10) else {
-      throw CECArgumentError(message: "numeric switch has an invalid value")
+      throw CECArgumentError(message: CECArgumentToken.invalidNumber)
     }
     let (next, overflow) = product.addingReportingOverflow(UInt64(char - 48))
     guard !overflow else {
-      throw CECArgumentError(message: "numeric switch has an invalid value")
+      throw CECArgumentError(message: CECArgumentToken.invalidNumber)
     }
     result = next
   }
@@ -99,7 +155,7 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
         "p", "d", "r", "l", "n", "t", "i", "b", "k", "z", "zt", "w", "rc", "report", "c",
         "threads", "cq", "memory",
       ].contains(name)
-    else { throw CECArgumentError(message: "unknown switch") }
+    else { throw CECArgumentError(message: CECArgumentToken.unknownSwitch) }
     let value: [UInt16]
     if let inline {
       value = inline
@@ -133,7 +189,8 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     case "r": range = 1...65535
     case "l": range = 0...65535
     case "n": range = 0...UInt64.max
-    case "t", "k", "w", "report": range = 1...UInt64(UInt32.max)
+    case "t", "w", "report": range = 1...UInt64(UInt32.max)
+    case "k": range = 1...65_536
     case "i": range = 0...UInt64(UInt32.max)
     case "b", "rc": range = 0...UInt64(Int32.max)
     case "z", "zt": range = 1...CECConstants.maximumTCPBatchBytes
@@ -143,7 +200,7 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     default: range = 1_048_576...UInt64.max
     }
     guard range.contains(n) else {
-      throw CECArgumentError(message: "unknown switch or value outside its valid range")
+      throw CECArgumentError(message: CECArgumentToken.outOfRange)
     }
     switch name {
     case "r": o.remotePort = UInt16(n)
@@ -175,15 +232,15 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
   if o.localPort != 0 && o.sessionCount != 1 {
     throw CECArgumentError(message: "a fixed /l port requires /c 1")
   }
+  if o.transport == .udp && pipeline {
+    throw CECArgumentError(message: CECArgumentToken.protocolOption)
+  }
   if o.help { return o }
   guard !o.hostUTF16.isEmpty, o.transport != .none else {
     throw CECArgumentError(message: "target host and /p tcp or /p udp are required")
   }
   if [literal, binary, printable].filter({ $0 }).count > 1 {
     throw CECArgumentError(message: "use exactly one of /d, /z, or /zt")
-  }
-  if o.transport == .udp && pipeline {
-    throw CECArgumentError(message: "/k is available only for TCP")
   }
   if o.transport == .tcp && o.reconnectSeconds >= 0 && o.localPort != 0 {
     throw CECArgumentError(message: "TCP reconnect cannot use a fixed /l port")
