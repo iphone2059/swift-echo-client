@@ -108,6 +108,20 @@ package func cecClaimAttempts(metrics: borrowing CECEngineMetrics, limit: UInt64
   }
   return 0
 }
+/// /n is a per-session quota. The grant is computed against the session's own claimed counter; the
+/// worker keeps the aggregate of every grant for the terminal accounting, which beginAttempt still
+/// accumulates into.
+package func cecClaimSessionAttempts(claimed: inout UInt64, limit: UInt64, requested: UInt64) -> UInt64 {
+  guard requested != 0 else { return 0 }
+  if limit == 0 {
+    claimed &+= requested
+    return requested
+  }
+  guard claimed < limit else { return 0 }
+  let grant = min(requested, limit - claimed)
+  claimed &+= grant
+  return grant
+}
 package func cecPercentileTarget(total: UInt64, numerator: UInt64, denominator: UInt64) -> UInt64 {
   guard total > 0, denominator > 0, numerator > 0, numerator <= denominator else { return 0 }
   let division = denominator.dividingFullWidth(total.multipliedFullWidth(by: numerator))
