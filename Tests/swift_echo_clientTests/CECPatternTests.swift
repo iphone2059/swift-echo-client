@@ -56,7 +56,7 @@ import Testing
   @Test func bytes() throws {
     var o = try cecParseOptions(wideArgs(["client", "127.0.0.1", "/p", "tcp"]))
     let p = try cecBuildPattern(options: o)
-    #expect((0..<p.count).map { p[$0] } == Array("C++ echo from 127.0.0.1".utf8))
+    #expect((0..<p.count).map { p[$0] } == Array("echo from 127.0.0.1".utf8))
     o.patternKind = .binaryCounter
     o.patternBytes = 513
     let b = try cecBuildPattern(options: o)
