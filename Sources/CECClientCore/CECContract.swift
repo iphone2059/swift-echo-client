@@ -236,8 +236,13 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     throw CECArgumentError(message: CECArgumentToken.protocolOption)
   }
   if o.help { return o }
-  guard !o.hostUTF16.isEmpty, o.transport != .none else {
-    throw CECArgumentError(message: "target host and /p tcp or /p udp are required")
+  // The baseline reports the missing target first and the missing protocol second, so a bare
+  // invocation and a host-only invocation are different mistakes.
+  guard !o.hostUTF16.isEmpty else {
+    throw CECArgumentError(message: "missing-target")
+  }
+  guard o.transport != .none else {
+    throw CECArgumentError(message: "missing-protocol")
   }
   if [literal, binary, printable].filter({ $0 }).count > 1 {
     throw CECArgumentError(message: "use exactly one of /d, /z, or /zt")
