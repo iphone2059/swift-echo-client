@@ -148,9 +148,8 @@ private func postReceive(_ s: UnsafeMutablePointer<CECEngineSession>, configurat
 private func beginAttempt(_ s: UnsafeMutablePointer<CECEngineSession>, configuration: borrowing CECWorkerConfiguration) -> Bool {
   let w = unsafe s.pointee.owner!
   let c = unsafe Ref(configuration)
-  // The quota is spent per session; the worker total is accumulated below for the accounting.
-  let grant = unsafe cecClaimSessionAttempts(
-    claimed: &s.pointee.claimed, limit: c.value.options.echoCount,
+  let grant = unsafe cecClaimAttempts(
+    metrics: configuration.metrics, limit: c.value.options.echoCount,
     requested: c.value.options.transport == .tcp ? UInt64(c.value.options.pipelineDepth) : 1)
   if grant == 0 {
     unsafe markDone(s)
