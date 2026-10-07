@@ -57,7 +57,7 @@ package func cecBuildPattern(options: borrowing CECOptions) throws(CECPatternErr
   }
   let text =
     options.patternKind == .literalText
-    ? options.literalPatternUTF16 : Array("C++ echo from ".utf16) + options.hostUTF16
+    ? options.literalPatternUTF16 : Array("echo from ".utf16) + options.hostUTF16
   guard !text.isEmpty else { throw .empty }
   let count = text.withUnsafeBufferPointer {
     unsafe WideCharToMultiByte(
