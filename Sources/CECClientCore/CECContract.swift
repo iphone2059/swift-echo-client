@@ -1,3 +1,5 @@
+import WinSDK
+
 // MARK: - Binary contract (echo-binary-contract-v1)
 
 /// Diagnostic tokens that must follow "Invalid arguments: " on stderr.
@@ -6,6 +8,17 @@ package enum CECArgumentToken {
   package static let invalidNumber = "invalid-number"
   package static let outOfRange = "out-of-range"
   package static let unknownSwitch = "unknown-switch"
+  package static let unexpectedValue = "unexpected-value"
+  package static let missingValue = "missing-value"
+  package static let conflictingPayload = "conflicting-payload"
+  package static let localPortConflict = "local-port-conflict"
+  package static let quotaOverflow = "quota-overflow"
+  package static let payloadSize = "payload-size"
+  package static let memoryCapacity = "memory-capacity"
+  package static let cqCapacity = "cq-capacity"
+  package static let missingTarget = "missing-target"
+  package static let missingProtocol = "missing-protocol"
+  package static let unexpectedTarget = "unexpected-target"
 }
 
 /// Which protocol a switch belongs to; a switch used with the wrong one is a usage error.
@@ -117,27 +130,35 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
   var binary = false
   var printable = false
   var pipeline = false
+  // A second positional is reported after the cross-field rules, exactly as the reference does.
+  var sawExtraTarget = false
+  // UTF-8 byte counts, which is how the reference measures a payload before any session exists.
+  var literalBytes: UInt64 = 0
+  var hostBytes: UInt64 = 0
   var i = 1
   while i < arguments.count {
     let token = arguments[i]
     i += 1
     guard let offset = switchOffset(token) else {
-      guard o.hostUTF16.isEmpty, !token.isEmpty, token.count < CECConstants.hostCapacity
+      if !o.hostUTF16.isEmpty {
+        sawExtraTarget = true
+        continue
+      }
+      guard !token.isEmpty, token.count < CECConstants.hostCapacity
       else {
         throw CECArgumentError(message: "client requires exactly one valid target host")
       }
       o.hostUTF16 = token
+      hostBytes = UInt64(String(decoding: token, as: UTF16.self).utf8.count)
       continue
     }
     let equal = token[offset...].firstIndex(of: 61)
     let name = asciiLower(token[offset..<(equal ?? token.count)])
     let inline = equal.map { Array(token[($0 + 1)...]) }
-    if let inline, inline.isEmpty {
-      throw CECArgumentError(message: "switch requires a non-empty inline value")
-    }
     if ["q", "quiet", "stats", "h", "help"].contains(name) {
       guard inline == nil else {
-        throw CECArgumentError(message: "flag switch does not accept a value")
+        // A flag never takes a value, and an empty one is still a value.
+        throw CECArgumentError(message: CECArgumentToken.unexpectedValue)
       }
       switch name {
       case "q", "quiet": o.quiet = true
@@ -158,18 +179,21 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     else { throw CECArgumentError(message: CECArgumentToken.unknownSwitch) }
     let value: [UInt16]
     if let inline {
+      guard !inline.isEmpty else { throw CECArgumentError(message: CECArgumentToken.missingValue) }
       value = inline
     } else {
       guard i < arguments.count, !arguments[i].isEmpty, switchOffset(arguments[i]) == nil
-      else { throw CECArgumentError(message: "switch requires a non-empty value") }
+      else { throw CECArgumentError(message: CECArgumentToken.missingValue) }
       value = arguments[i]
       i += 1
     }
     if name == "p" {
+      // The reference matches the protocol keyword itself and reports the parse failure as an
+      // out-of-range value, not as a protocol-specific message.
       switch asciiLower(value[...]) {
       case "tcp": o.transport = .tcp
       case "udp": o.transport = .udp
-      default: throw CECArgumentError(message: "/p requires tcp or udp")
+      default: throw CECArgumentError(message: CECArgumentToken.outOfRange)
       }
       continue
     }
@@ -180,6 +204,7 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
       }
       o.literalPatternUTF16 = value
       o.patternKind = .literalText
+      literalBytes = UInt64(String(decoding: value, as: UTF16.self).utf8.count)
       literal = true
       continue
     }
@@ -229,39 +254,89 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     default: o.memoryBytes = n
     }
   }
-  if o.localPort != 0 && o.sessionCount != 1 {
-    throw CECArgumentError(message: "a fixed /l port requires /c 1")
+  // The cross-field rules keep the reference's precedence: the worker split first, then the
+  // positional arguments, the payload conflict, the protocol options, the local-port rules, the
+  // quota and only then the payload and capacity budgets.
+  if o.workerCount > o.sessionCount {
+    throw CECArgumentError(message: CECArgumentToken.outOfRange)
+  }
+  if sawExtraTarget {
+    throw CECArgumentError(message: CECArgumentToken.unexpectedTarget)
+  }
+  // The baseline reports the missing target first and the missing protocol second, so a bare
+  // invocation and a host-only invocation are different mistakes. /h suppresses only these two
+  // checks; every other rule still applies.
+  if !o.help && o.hostUTF16.isEmpty {
+    throw CECArgumentError(message: CECArgumentToken.missingTarget)
+  }
+  if !o.help && o.transport == .none {
+    throw CECArgumentError(message: CECArgumentToken.missingProtocol)
+  }
+  if [literal, binary, printable].filter({ $0 }).count > 1 {
+    throw CECArgumentError(message: CECArgumentToken.conflictingPayload)
   }
   if o.transport == .udp && pipeline {
     throw CECArgumentError(message: CECArgumentToken.protocolOption)
   }
-  if o.help { return o }
-  // The baseline reports the missing target first and the missing protocol second, so a bare
-  // invocation and a host-only invocation are different mistakes.
-  guard !o.hostUTF16.isEmpty else {
-    throw CECArgumentError(message: "missing-target")
+  if o.localPort != 0 && (o.sessionCount != 1 || (o.transport == .tcp && o.reconnectSeconds >= 0)) {
+    throw CECArgumentError(message: CECArgumentToken.localPortConflict)
   }
-  guard o.transport != .none else {
-    throw CECArgumentError(message: "missing-protocol")
+  if o.sessionCount != 0 && o.echoCount > UInt64.max / UInt64(o.sessionCount) {
+    throw CECArgumentError(message: CECArgumentToken.quotaOverflow)
   }
-  if [literal, binary, printable].filter({ $0 }).count > 1 {
-    throw CECArgumentError(message: "use exactly one of /d, /z, or /zt")
+  // Nothing else can be validated without a protocol, which is how /h alone succeeds.
+  if o.transport == .none { return o }
+  // Each worker owns its own CQ and its own registered arena, so the largest shard decides both
+  // budgets.
+  let workers = cecResolveWorkerCount(configured: o.workerCount, sessions: o.sessionCount)
+  let shard = (UInt64(o.sessionCount) + workers - 1) / workers
+  // The effective payload length is known before any session exists.
+  let patternBytes: UInt64
+  switch o.patternKind {
+  case .binaryCounter, .printableCounter: patternBytes = UInt64(o.patternBytes)
+  case .literalText: patternBytes = literalBytes
+  case .defaultText:
+    patternBytes =
+      hostBytes == 0 ? 0 : UInt64(CECConstants.defaultTextPrefix.utf8.count) + hostBytes
   }
-  if o.transport == .tcp && o.reconnectSeconds >= 0 && o.localPort != 0 {
-    throw CECArgumentError(message: "TCP reconnect cannot use a fixed /l port")
+  if o.transport == .udp && patternBytes > CECConstants.maximumUDPPayloadBytes {
+    throw CECArgumentError(message: CECArgumentToken.payloadSize)
   }
-  if o.transport == .udp && o.patternBytes > CECConstants.maximumUDPPayloadBytes {
-    throw CECArgumentError(message: "UDP payload must not exceed 65507 bytes")
-  }
-  if o.patternBytes != 0 {
-    guard let batch = cecCheckedProduct(UInt64(o.patternBytes), UInt64(o.pipelineDepth)),
+  if patternBytes != 0 {
+    guard let batch = cecCheckedProduct(patternBytes, UInt64(o.pipelineDepth)),
       batch <= CECConstants.maximumTCPBatchBytes
     else {
-      throw CECArgumentError(
-        message: "TCP payload multiplied by depth must not exceed 64 MiB")
+      throw CECArgumentError(message: CECArgumentToken.payloadSize)
     }
-    // Actual worker count (including the automatic setting) determines shared
-    // send storage. The engine performs the authoritative /memory check.
+    guard let perSession = cecCheckedProduct(batch, 2),
+      let storage = cecCheckedProduct(perSession, UInt64(o.sessionCount)),
+      storage <= o.memoryBytes
+    else {
+      throw CECArgumentError(message: CECArgumentToken.memoryCapacity)
+    }
+    // One worker registers its whole shard, and a single registration may not exceed DWORD.
+    guard let workerStorage = cecCheckedProduct(perSession, shard),
+      workerStorage <= UInt64(UInt32.max)
+    else {
+      throw CECArgumentError(message: CECArgumentToken.memoryCapacity)
+    }
+  }
+  // One attempt is one receive plus one send whatever /k is, so the largest shard reserves
+  // exactly two operations per session against the completion queue.
+  guard shard * 2 <= UInt64(o.cqCapacity) else {
+    throw CECArgumentError(message: CECArgumentToken.cqCapacity)
   }
   return o
+}
+
+/// Workers the reference would create: /threads, or the active processor count clamped to [1, 64],
+/// and never more than there are sessions. The contract owns the rule so the parser's capacity
+/// budgets and the run's actual split can never disagree.
+package func cecResolveWorkerCount(configured: UInt32, sessions: UInt32) -> UInt64 {
+  if sessions == 0 { return 1 }
+  var workers = UInt64(configured)
+  if workers == 0 {
+    workers = min(64, max(1, UInt64(GetActiveProcessorCount(0xffff))))
+  }
+  return min(workers, UInt64(sessions))
 }

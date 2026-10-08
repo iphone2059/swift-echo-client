@@ -41,10 +41,10 @@ private func runStarted(options: borrowing CECOptions, control: CECSharedControl
       error: options.transport == .udp ? 13 : 534)
     return .usage
   }
-  let count = min(
-    options.sessionCount,
-    options.workerCount == 0
-      ? min(32, max(1, GetActiveProcessorCount(0xffff))) : options.workerCount)
+  // The contract owns the split, so the parser's capacity budgets and the run's actual shard can
+  // never disagree about how many workers and sessions exist.
+  let count = UInt32(
+    cecResolveWorkerCount(configured: options.workerCount, sessions: options.sessionCount))
   guard cecCheckedSharedStorageBytes(
     sessions: UInt64(options.sessionCount), workers: UInt64(count),
     batchBytes: maximum, memoryLimit: options.memoryBytes) != nil

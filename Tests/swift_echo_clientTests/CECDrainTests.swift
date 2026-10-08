@@ -59,7 +59,7 @@ private let drainTrace = Mutex(DrainTrace())
       sessionCount: 1, memoryShare: 2))
     let w = owner.baseAddress
     guard let storage = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
-      let memory = VirtualAlloc(nil, 4096, DWORD(MEM_COMMIT | MEM_RESERVE), DWORD(PAGE_READWRITE))
+      let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_COMMIT) | UInt32(MEM_RESERVE)), DWORD(UInt32(PAGE_READWRITE)))
     else { Issue.record("allocation"); return }
     w.pointee.sessionAddress = storage.baseAddress
     let first = UInt(bitPattern: storage.baseAddress)

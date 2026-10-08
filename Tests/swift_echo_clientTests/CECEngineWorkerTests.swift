@@ -21,7 +21,7 @@ import WinSDK
     let owner = CECWorkerOwner(configuration: config)
     let w = owner.baseAddress
     guard let sessions = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
-      let memory = VirtualAlloc(nil, 4096, DWORD(MEM_COMMIT | MEM_RESERVE), DWORD(PAGE_READWRITE))
+      let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_COMMIT) | UInt32(MEM_RESERVE)), DWORD(UInt32(PAGE_READWRITE)))
     else {
       Issue.record("allocation")
       return

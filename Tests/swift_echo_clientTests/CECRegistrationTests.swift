@@ -42,7 +42,7 @@ private let registrationTrace = Mutex(RegistrationTrace())
           let address = UnsafeRawPointer(bitPattern: trace.regions[Int(id) - 1])
           let queried = VirtualQuery(address, &info, UInt64(MemoryLayout<MEMORY_BASIC_INFORMATION>.size))
           trace.memoryAliveAtRelease =
-            trace.memoryAliveAtRelease && queried != 0 && info.State == DWORD(MEM_COMMIT)
+            trace.memoryAliveAtRelease && queried != 0 && info.State == DWORD(UInt32(MEM_COMMIT))
         }
       }
       rio.RIOCreateCompletionQueue = { _, _ in RIO_CQ(bitPattern: 0x1000) }

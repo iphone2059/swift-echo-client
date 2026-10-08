@@ -29,7 +29,7 @@ import WinSDK
   }
   @Test func viewsAndGuardBytes() throws {
     var arena = CECVirtualArenaOwner(
-      try #require(VirtualAlloc(nil, 64, DWORD(MEM_RESERVE | MEM_COMMIT), DWORD(PAGE_READWRITE))),
+      try #require(VirtualAlloc(nil, 64, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))),
       byteCount: 64)
     let initialized: Void? = arena.withMutableBytes(in: 0..<64) { bytes in
       for i in bytes.indices { bytes[i] = 0xAB }

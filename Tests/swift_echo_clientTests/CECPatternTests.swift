@@ -70,9 +70,9 @@ import Testing
     let u = try cecBuildPattern(options: o)
     #expect((0..<u.count).map { u[$0] } == Array("中文 😀".utf8))
     o.literalPatternUTF16 = [0xD800]
-    #expect(throws: CECPatternError.invalidUTF16) { try cecBuildPattern(options: o) }
+    #expect(throws: CECPatternError.invalidUTF16) { _ = try cecBuildPattern(options: o) }
     o.literalPatternUTF16 = []
-    #expect(throws: CECPatternError.empty) { try cecBuildPattern(options: o) }
+    #expect(throws: CECPatternError.empty) { _ = try cecBuildPattern(options: o) }
   }
   @Test func repetitionAndCapacity() {
     var dest = [UInt8](repeating: 0, count: 11)

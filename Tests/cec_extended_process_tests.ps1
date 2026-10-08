@@ -11,7 +11,8 @@ foreach ($scenario in @('multithread','reconnect','corruptStop','pacing')) {
     try {
         $args = @('127.0.0.1','/p','tcp','/r',[string]$peer.Port,'/z','4096','/q','/stats')
         switch ($scenario) {
-            multithread { $args += @('/n','37','/k','8','/c','8','/threads','3'); $code = 0; $patterns = @('echoed=37 ','corrupted=0 ','lost=0 ','network_errors=0 ') }
+            # /n is a per-session quota: eight sessions of 37 echoes are 296 in total.
+            multithread { $args += @('/n','37','/k','8','/c','8','/threads','3'); $code = 0; $patterns = @('echoed=296 ','corrupted=0 ','lost=0 ','network_errors=0 ') }
             reconnect { $args += @('/n','3','/rc','0'); $code = 3; $patterns = @('echoed=1 ','lost=2 ','network_errors=2 ') }
             corruptStop { $args += @('/n','0','/w','1','/t','30'); $code = 3; $patterns = @('corrupted=1 ','lost=0 ') }
             pacing { $args += @('/n','3','/i','30'); $code = 0; $patterns = @('echoed=3 ','lost=0 ') }
@@ -44,14 +45,19 @@ try {
 $peer = [CECTestPeer]::new('tcp','echo',4096); $closedPort = $peer.Port; $peer.Dispose()
 Assert-Result (Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/r',[string]$closedPort,'/n','0','/q','/stats')) 2 @('network_errors=1 ')
 Assert-Result (Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/r',[string]$closedPort,'/n','1','/q','/stats')) 3 @('lost=1 ')
-Assert-Result (Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/c','33','/threads','1','/cq','64','/z','1','/stats')) 4 @()
+# One attempt is one receive plus one send, so 33 sessions in one shard need 66 queue entries and
+# the reference rejects that while parsing the arguments. The diagnostic is on stderr.
+$cq = Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/c','33','/threads','1','/cq','64','/z','1','/stats')
+Assert-Result $cq 1 @()
+if ($cq.ErrorText -notmatch 'cq-capacity') { throw "missing cq-capacity: $($cq.ErrorText)" }
 Write-Host 'PASS connection refusal and CQ capacity failure'
 foreach ($count in @(1,10003)) {
     $peer = [CECTestPeer]::new('tcp','echo',4096)
     try {
+        # The quota is per session, so 64 sessions of $count echoes complete $count * 64 in total.
         Assert-Result (Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/r',[string]$peer.Port,
             '/n',[string]$count,'/k','8','/z','64','/c','64','/threads','64','/q','/stats') 10000) 0 @(
-            "echoed=$count ", 'corrupted=0 ', 'lost=0 ', 'network_errors=0 ')
+            "echoed=$($count * 64) ", 'corrupted=0 ', 'lost=0 ', 'network_errors=0 ')
     } finally { $peer.Dispose() }
 }
 Write-Host 'PASS 64 workers, early finishes and exact finite quota'
@@ -64,12 +70,13 @@ try {
 foreach ($threads in @(1,4)) {
     $peer = [CECTestPeer]::new('tcp','echo',4096)
     try {
-        # 256 KiB batch: five regions with one worker, eight with four.
-        $memory = if ($threads -eq 1) { 1310720 } else { 2097152 }
+        # 256 KiB batch: the reference budget is two batches per session whatever the worker split
+        # is, so the same limit is required for one worker and for four.
+        $memory = 2097152
         $result = Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/r',[string]$peer.Port,
             '/n','37','/k','4','/z','65536','/c','4','/threads',[string]$threads,
             '/memory',[string]$memory,'/q','/stats')
-        Assert-Result $result 0 @('echoed=37 ', 'corrupted=0 ', 'lost=0 ')
+        Assert-Result $result 0 @('echoed=148 ', 'corrupted=0 ', 'lost=0 ')
         Assert-Result (Invoke-CECProcess $ClientPath @('127.0.0.1','/p','tcp','/r',[string]$peer.Port,
             '/n','1','/k','4','/z','65536','/c','4','/threads',[string]$threads,
             '/memory',[string]($memory-1),'/q','/stats')) 1 @()

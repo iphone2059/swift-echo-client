@@ -24,7 +24,7 @@ private func stateWorker(
       memoryShare: 8))
   let w = owner.baseAddress
   guard let storage = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
-    let memory = VirtualAlloc(nil, 4096, DWORD(MEM_RESERVE | MEM_COMMIT), DWORD(PAGE_READWRITE))
+    let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))
   else { throw AllocationError() }
   w.pointee.sessionAddress = storage.baseAddress
   let first = UInt(bitPattern: storage.baseAddress)

@@ -40,7 +40,7 @@ private let releaseOrder = Mutex<[String]>([])
     p[3] = 100
     #expect(storage.baseAddress == p && p[3] == 100 && p[7] == 42)
     var arena = CECVirtualArenaOwner(
-      VirtualAlloc(nil, 4096, DWORD(MEM_RESERVE | MEM_COMMIT), DWORD(PAGE_READWRITE)))
+      VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE))))
     let released = arena.release()
     let address = try #require(released)
     #expect(arena.rawValue == nil)

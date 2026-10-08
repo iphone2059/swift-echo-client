@@ -29,7 +29,14 @@ package final class CECSharedControl: Sendable {
       return 0
     }
   }
-  private func wakeHandle() -> HANDLE? { unsafe wake.withLock { unsafe $0.rawValue } }
+  // The handle crosses the lock as a bit pattern: a raw pointer is not Sendable, so returning the
+  // member of the borrowed inout parameter would send a non-Sendable value out of the lock's
+  // isolation region. The lock guards adoption, not the caller's later use of the value.
+  private func wakeHandle() -> HANDLE? {
+    let bits: UInt = unsafe wake.withLock { UInt(bitPattern: unsafe $0.rawValue) }
+    guard bits != 0 else { return nil }
+    return unsafe HANDLE(bitPattern: bits)
+  }
   package func signalWake() {
     guard let event = unsafe wakeHandle() else { return }
     if unsafe !SetEvent(event) {
