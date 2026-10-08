@@ -129,8 +129,11 @@ private func runStarted(options: borrowing CECOptions, control: CECSharedControl
   {
     cecFailFast(stage: "client final claimed accounting", error: 13)
   }
+  // /n is a per-session quota, so the run the command line describes is /n times the session
+  // count; a run that never connected therefore reports the whole size as never claimed.
   final.lost &+= cecUnclaimedEchoes(
-    limit: options.echoCount, claimed: final.claimed, controlledStop: controlledStop)
+    limit: options.echoCount * UInt64(options.sessionCount), claimed: final.claimed,
+    controlledStop: controlledStop)
   if !options.quiet || options.stats {
     print(cecMetricsLine(
       phase: "final", options: options, metrics: final,
