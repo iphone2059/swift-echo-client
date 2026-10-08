@@ -59,6 +59,8 @@ package struct CECEngineSession {
   package var index: UInt32 = 0
   package var outstanding: UInt32 = 0
   package var requestedEchoes: UInt64 = 0
+  /// Echoes this session has already been granted, so the /n quota is spent per session.
+  package var claimed: UInt64 = 0
   package var attemptBytes = 0
   package var sendOffset = 0
   package var receivedBytes = 0

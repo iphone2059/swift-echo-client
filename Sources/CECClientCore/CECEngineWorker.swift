@@ -148,9 +148,15 @@ private func postReceive(_ s: UnsafeMutablePointer<CECEngineSession>, configurat
 private func beginAttempt(_ s: UnsafeMutablePointer<CECEngineSession>, configuration: borrowing CECWorkerConfiguration) -> Bool {
   let w = unsafe s.pointee.owner!
   let c = unsafe Ref(configuration)
-  let grant = unsafe cecClaimAttempts(
-    metrics: configuration.metrics, limit: c.value.options.echoCount,
+  // The quota is spent per session: the counter is read into a local, claimed against, and written
+  // back. The run-wide quota still accumulates every grant, because the final accounting compares it
+  // with the sum the workers report.
+  var sessionClaimed = unsafe s.pointee.claimed
+  let grant = unsafe cecClaimSessionAttempts(
+    claimed: &sessionClaimed, limit: c.value.options.echoCount,
     requested: c.value.options.transport == .tcp ? UInt64(c.value.options.pipelineDepth) : 1)
+  unsafe s.pointee.claimed = sessionClaimed
+  if grant != 0 { _ = unsafe configuration.metrics.claimed.wrappingAdd(grant, ordering: .relaxed) }
   if grant == 0 {
     unsafe markDone(s)
     return true
