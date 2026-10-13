@@ -2,6 +2,14 @@ param([string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $sources = Get-ChildItem -LiteralPath (Join-Path $root 'Sources') -Recurse -File -Filter '*.swift'
+$expectedNames = @('contract.swift','types.swift','payload.swift','metrics.swift','native.swift','internal.swift','engine.swift','main.swift')
+if ($sources.Count -ne $expectedNames.Count -or
+    (@($sources.Name | Sort-Object) -join ',') -cne (@($expectedNames | Sort-Object) -join ',')) {
+    throw 'Sources file mapping does not match the Rust/Zig business responsibilities'
+}
+if (@(Get-ChildItem -LiteralPath (Join-Path $root 'Sources') -Directory).Count -ne 0) {
+    throw 'Sources must contain source files directly, without target subdirectories'
+}
 $all = ($sources | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
 if ($all.Contains([char]0)) { throw 'NUL bytes in Swift source' }
 foreach ($rule in @(
@@ -13,7 +21,7 @@ foreach ($rule in @(
     'import\s+Testing\b|@Test\b|\bcecExercise\w*\s*\('
 )) { if ($all -match $rule) { throw "source policy violation: $rule" } }
 if ($sources.Name -match 'Tests?\.swift$') { throw 'test source belongs under Tests, not Sources' }
-foreach ($required in @('RIOReceive','RIOSend','ConnectEx','~Copyable','UniqueArray','MutableSpan','borrow','Atomic','cecWorkerMayRelease','cecRequireOutstanding')) {
+foreach ($required in @('RIOReceive','RIOSend','ConnectEx','~Copyable','CECFixedArray','MutableSpan','borrow','Atomic','cecWorkerMayRelease','cecRequireOutstanding')) {
     if (-not $all.Contains($required)) { throw "source policy missing: $required" }
 }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'Package.swift') -Raw
@@ -24,19 +32,16 @@ if ([regex]::Matches($manifest, '\.strictMemorySafety\(\)').Count -ne 2 -or
     [regex]::Matches($manifest, '\.treatWarning\("StrictMemorySafety", as: \.error\)').Count -ne 2) {
     throw 'core and production executable require strict memory safety as errors'
 }
-# Exactly two reviewed owners abstract unsafe storage; no blanket safe exemption.
+# Only the three named native owners may abstract unsafe storage.
 foreach ($source in $sources) {
     $text = Get-Content -LiteralPath $source.FullName -Raw
-    if ($text -match '@safe' -and $source.Name -notin @('CECOwnership.swift','CECMetrics.swift')) { throw "Unreviewed @safe: $($source.Name)" }
-    if ($source.Name -eq 'CECOwnership.swift' -and
-        ([regex]::Matches($text, '@safe\b').Count -ne 1 -or
-         [regex]::Matches($text, '@safe\s+package struct CECVirtualArenaOwner').Count -ne 1)) {
-        throw 'Unreviewed safe declaration'
-    }
-    if ($source.Name -eq 'CECMetrics.swift' -and
-        ([regex]::Matches($text, '@safe\b').Count -ne 1 -or
+    if ($text -match '@safe' -and $source.Name -ne 'native.swift') { throw "Unreviewed @safe: $($source.Name)" }
+    if ($source.Name -eq 'native.swift' -and
+        ([regex]::Matches($text, '@safe\b').Count -ne 3 -or
+         [regex]::Matches($text, '@safe\s+package struct CECVirtualArenaOwner').Count -ne 1 -or
+         [regex]::Matches($text, '@safe\s+package struct CECFixedArray<Element>').Count -ne 1 -or
          [regex]::Matches($text, '@safe\s+package final class CECSharedControl').Count -ne 1)) {
-        throw 'Unreviewed safe control declaration'
+        throw 'Unreviewed safe declaration'
     }
 }
 Write-Host 'PASS standalone RIO/ownership source policy'

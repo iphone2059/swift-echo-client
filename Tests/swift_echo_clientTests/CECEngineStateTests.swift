@@ -23,6 +23,7 @@ private func stateWorker(
       metrics: CECEngineMetrics(), control: CECSharedControl(), workerIndex: 0, sessionCount: 1,
       memoryShare: 8))
   let w = owner.baseAddress
+  w.pointee.core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
   guard let storage = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
     let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))
   else { throw AllocationError() }
@@ -32,17 +33,28 @@ private func stateWorker(
   w.pointee.resources.sessions = consume storage
   w.pointee.resources.arena.reset(memory, byteCount: 4096)
   w.pointee.memory = memory.assumingMemoryBound(to: UInt8.self)
-  w.pointee.resources.sockets.append(CECSocketOwner())
   let s = w.pointee.sessionAddress!
   s.pointee.owner = w
-  s.pointee.state = .active
+  w.pointee.core.sessions[0].state = .active
   s.pointee.receiveArenaOffset = 4
-  s.pointee.attemptBytes = 4
-  s.pointee.requestedEchoes = 1
-  s.pointee.outstanding = 2
-  QueryPerformanceCounter(&s.pointee.startedAt)
+  w.pointee.core.sessions[0].attemptBytes = 4
+  w.pointee.core.sessions[0].requestedEchoes = 1
+  s.pointee.sendOutstanding = true
+    s.pointee.receiveOutstanding = true
+    s.pointee.generation = 1
+    s.pointee.sendPostedBytes = w.pointee.core.sessions[0].attemptBytes
+    s.pointee.receivePostedBytes = w.pointee.core.sessions[0].attemptBytes
+    w.pointee.transport.totalOutstanding = 2
+    w.pointee.transport.rioOutstanding = 2
+    w.pointee.transport.notificationArmed = true
+    w.pointee.transport.notifyArms = 1
+    w.pointee.core.sessions[0].claimed = 1
+    w.pointee.core.sessions[0].attemptAccounted = false
+    w.pointee.core.sessions[0].receivePosted = true
+    w.pointee.core.sessions[0].activeCounted = true
+    w.pointee.core.metrics.claimed = 1
+    w.pointee.core.metrics.active = 1
   QueryPerformanceFrequency(&w.pointee.performanceFrequency)
-  w.pointee.configuration.metrics.claimed.store(1, ordering: .relaxed)
   w.pointee.metrics.claimed = 1
   for i in 0..<4 {
     w.pointee.memory![i] = UInt8(i)
@@ -62,13 +74,15 @@ private func stateWorker(
     let s = w.pointee.sessionAddress!
     var send = RIORESULT()
     send.RequestContext = UInt64(UInt(bitPattern: cecSendRequest(s)))
+    send.SocketContext = UInt64(UInt(bitPattern: s))
     send.BytesTransferred = 2
     cecProcessRIOResult(w, result: send)
-    #expect(s.pointee.sendOffset == 2 && s.pointee.outstanding == 2 && !s.pointee.sendDone)
+    #expect(s.pointee.sendOffset == 2 && s.pointee.outstanding == 2 && !w.pointee.core.sessions[0].sendDone)
     #expect(sentContinuation.withLock { $0.0 == 2 && $0.1 == 2 })
     cecProcessRIOResult(w, result: send)
     var receive = RIORESULT()
     receive.RequestContext = UInt64(UInt(bitPattern: cecReceiveRequest(s)))
+    receive.SocketContext = UInt64(UInt(bitPattern: s))
     receive.BytesTransferred = 3
     cecProcessRIOResult(w, result: receive)
     #expect(
@@ -82,14 +96,16 @@ private func stateWorker(
     let s = w.pointee.sessionAddress!
     var receive = RIORESULT()
     receive.RequestContext = UInt64(UInt(bitPattern: cecReceiveRequest(s)))
+    receive.SocketContext = UInt64(UInt(bitPattern: s))
     receive.BytesTransferred = 2
     cecProcessRIOResult(w, result: receive)
-    #expect(s.pointee.state == .closing && s.pointee.outstanding == 1)
+    #expect(w.pointee.core.sessions[0].state == .closing && s.pointee.outstanding == 1)
     var send = RIORESULT()
     send.RequestContext = UInt64(UInt(bitPattern: cecSendRequest(s)))
+    send.SocketContext = UInt64(UInt(bitPattern: s))
     send.Status = 995
     cecProcessRIOResult(w, result: send)
-    #expect(s.pointee.state == .done && s.pointee.outstanding == 0 && w.pointee.liveSessions == 0)
+    #expect(w.pointee.core.sessions[0].state == .done && s.pointee.outstanding == 0 && w.pointee.liveSessions == 0)
     #expect(
       w.pointee.metrics.lost == 1
         && w.pointee.metrics.networkErrors == 1)
@@ -99,15 +115,17 @@ private func stateWorker(
     let w = owner.baseAddress
     let s = w.pointee.sessionAddress!
     cecStopWorker(w)
-    #expect(s.pointee.state == .closing && s.pointee.outstanding == 2)
+    #expect(w.pointee.core.sessions[0].state == .closing && s.pointee.outstanding == 2)
     var result = RIORESULT()
     result.Status = 995
     result.RequestContext = UInt64(UInt(bitPattern: cecReceiveRequest(s)))
+    result.SocketContext = UInt64(UInt(bitPattern: s))
     cecProcessRIOResult(w, result: result)
     result.RequestContext = UInt64(UInt(bitPattern: cecSendRequest(s)))
+    result.SocketContext = UInt64(UInt(bitPattern: s))
     cecProcessRIOResult(w, result: result)
     #expect(
-      s.pointee.state == .done && w.pointee.metrics.lost == 0
+      w.pointee.core.sessions[0].state == .done && w.pointee.metrics.lost == 0
         && w.pointee.metrics.networkErrors == 0)
   }
 }

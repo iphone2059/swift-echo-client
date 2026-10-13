@@ -35,7 +35,7 @@ else { Write-Host 'PASS gate rejects unrelated diagnostic containing Escape in f
 
 Copy-Item -LiteralPath (Join-Path $cecRoot 'Sources') -Destination $cecScratch -Recurse
 Copy-Item -LiteralPath (Join-Path $cecRoot 'Package.swift') -Destination $cecScratch
-$cecOwnerPath = Join-Path $cecScratch 'Sources/CECClientCore/CECOwnership.swift'
+$cecOwnerPath = Join-Path $cecScratch 'Sources/native.swift'
 [IO.File]::AppendAllText($cecOwnerPath, "`n@safe`nprivate struct UnreviewedSafeStorage { var address: UnsafePointer<Int>? }`n", [Text.UTF8Encoding]::new($false))
 $cecRejectedAnnotation = $false
 try { & (Join-Path $PSScriptRoot 'cec_source_policy.ps1') -ProjectRoot $cecScratch }
@@ -45,16 +45,16 @@ catch {
 }
 if (-not $cecRejectedAnnotation) { $cecFailures.Add('source policy accepted an extra @safe in the permitted owner file') }
 else { Write-Host 'PASS gate rejects extra @safe in the permitted owner file' }
-# Restore the arena fixture before auditing the second exact safe declaration.
-Copy-Item -LiteralPath (Join-Path $cecRoot 'Sources/CECClientCore/CECOwnership.swift') -Destination $cecOwnerPath
-$cecControlPath = Join-Path $cecScratch 'Sources/CECClientCore/CECMetrics.swift'
+# Restore the native owner file, then reject an exemption outside its reviewed scope.
+Copy-Item -LiteralPath (Join-Path $cecRoot 'Sources/native.swift') -Destination $cecOwnerPath
+$cecControlPath = Join-Path $cecScratch 'Sources/types.swift'
 [IO.File]::AppendAllText($cecControlPath, "`n@safe`nprivate struct UnreviewedSafeControl { var address: UnsafePointer<Int>? }`n", [Text.UTF8Encoding]::new($false))
 $cecRejectedControl = $false
 try { & (Join-Path $PSScriptRoot 'cec_source_policy.ps1') -ProjectRoot $cecScratch }
 catch {
-    if ($_.Exception.Message -notmatch 'Unreviewed safe control declaration') { throw }
+    if ($_.Exception.Message -notmatch 'Unreviewed @safe') { throw }
     $cecRejectedControl = $true
 }
-if (-not $cecRejectedControl) { $cecFailures.Add('source policy accepted an extra @safe in the permitted control file') }
-else { Write-Host 'PASS gate rejects extra @safe in the permitted control file' }
+if (-not $cecRejectedControl) { $cecFailures.Add('source policy accepted an extra @safe outside the reviewed native owner file') }
+else { Write-Host 'PASS gate rejects extra @safe outside the reviewed native owner file' }
 if ($cecFailures.Count -ne 0) { throw ($cecFailures -join '; ') }

@@ -3,8 +3,8 @@ import Testing
 @testable import CECClientCore
 
 @Suite struct CECTimerHeapTests {
-  @Test func equalEarlierLaterAndTies() {
-    var heap = CECTimerHeap(capacity: 4)
+  @Test func equalEarlierLaterAndTies() throws {
+    var heap = try CECTimerHeap(capacity: 4)
     for i: UInt32 in 0..<4 {
       let inserted = heap.insertOrUpdate(sessionIndex: i, deadline: 100)
       #expect(inserted)
@@ -26,8 +26,8 @@ import Testing
     #expect(removed)
     #expect(heap.size == 0)
   }
-  @Test func referenceModel() {
-    var heap = CECTimerHeap(capacity: 64)
+  @Test func referenceModel() throws {
+    var heap = try CECTimerHeap(capacity: 64)
     #expect(heap.waitMilliseconds(now: 0) == UInt32.max)
     var reference: [UInt32: UInt64] = [:]
     var seed: UInt32 = 0xC0FF_EE11

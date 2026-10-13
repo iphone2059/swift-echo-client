@@ -15,7 +15,9 @@ $cecCases = if ($Phase -eq 'features') {
 } else {
     @(@('OwnersPositive', $true), @('OwnersCopyRejected', $false),
       @('OwnersUseAfterConsumeRejected', $false), @('BorrowedOwnerDestroyedRejected', $false),
-      @('SpanEscapeRejected', $false), @('ConfigurationCopyRejected', $false))
+      @('SpanEscapeRejected', $false), @('ConfigurationCopyRejected', $false),
+      @('CoreOwnershipPositive', $true), @('CoreCopyRejected', $false),
+      @('FixedArrayCopyRejected', $false))
 }
 foreach ($cecCase in $cecCases) {
     $cecName = $cecCase[0]

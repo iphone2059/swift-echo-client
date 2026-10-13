@@ -99,9 +99,9 @@ func wideArgs(_ values: [String]) -> [[UInt16]] { values.map { Array($0.utf16) }
     let bounds: [(String, UInt64, UInt64)] = [
       ("r", 1, 65535), ("l", 0, 65535), ("t", 1, UInt64(UInt32.max)),
       ("i", 0, UInt64(UInt32.max)), ("b", 0, UInt64(Int32.max)), ("k", 1, 65_536),
-      ("z", 1, 67_108_864), ("zt", 1, 67_108_864), ("w", 1, UInt64(UInt32.max)),
-      ("rc", 0, UInt64(Int32.max)), ("report", 1, UInt64(UInt32.max)),
-      ("c", 1, 1_048_576), ("threads", 1, 64), ("cq", 64, 1_048_576),
+      ("z", 1, 67_108_864), ("zt", 1, 67_108_864), ("w", 0, UInt64(UInt32.max)),
+      ("rc", 0, UInt64(UInt32.max)), ("report", 0, UInt64(UInt32.max)),
+      ("c", 1, 1_048_576), ("threads", 0, 64), ("cq", 64, 1_048_576),
       ("memory", 1_048_576, UInt64.max),
     ]
     // The bounds are checked with a command line whose budgets the largest legal value still
@@ -131,8 +131,9 @@ func wideArgs(_ values: [String]) -> [[UInt16]] { values.map { Array($0.utf16) }
     #expect(throws: CECArgumentError.self) {
       try cecParseOptions(wideArgs(["client", String(repeating: "a", count: 256), "/p", "tcp"]))
     }
-    let raw = try cecParseOptions(wideArgs(["client", "host", "/p", "tcp", "/d"]) + [[0xD800]])
-    #expect(raw.literalPatternUTF16 == [0xD800])
+    #expect(throws: CECArgumentError.self) {
+      try cecParseOptions(wideArgs(["client", "host", "/p", "tcp", "/d"]) + [[0xD800]])
+    }
   }
   @Test func arithmeticAndClassification() {
     #expect(cecCheckedProduct(8, 65536) == 524288)

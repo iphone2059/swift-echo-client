@@ -4,10 +4,10 @@ import WinSDK
 @testable import CECClientCore
 
 @Suite struct CECArenaTests {
-  @Test func sharedStorageAndAttemptRanges() {
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 80) == 80)
+  @Test func independentStorageAndAttemptRanges() {
+    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 128) == 128)
     #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 4, batchBytes: 16, memoryLimit: 128) == 128)
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 79) == nil)
+    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 127) == nil)
     #expect(cecCheckedSharedStorageBytes(sessions: 0, workers: 1, batchBytes: 16, memoryLimit: 100) == nil)
     #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 5, batchBytes: 16, memoryLimit: 100) == nil)
     #expect(cecCheckedSharedStorageBytes(sessions: UInt64.max, workers: 1, batchBytes: 1, memoryLimit: UInt64.max) == nil)

@@ -1,6 +1,57 @@
 import WinSDK
 
 package enum CECPatternError: Error, Equatable { case invalidUTF16, empty, allocationFailure }
+
+/// Payload sizing is pure and performs no allocation. Production may allocate the returned extent
+/// through a fallible native owner, then fill its synchronous mutable view.
+package func cecPatternByteCount(options: borrowing CECOptions) throws(CECPatternError) -> Int {
+  let size: UInt64
+  switch options.patternKind {
+  case .binaryCounter, .printableCounter:
+    size = UInt64(options.patternBytes)
+  case .literalText:
+    guard let bytes = cecUTF8ByteCount(options.literalPatternUTF16) else { throw .invalidUTF16 }
+    size = bytes
+  case .defaultText:
+    guard let bytes = cecUTF8ByteCount(options.hostUTF16) else { throw .invalidUTF16 }
+    size = UInt64(CECConstants.defaultTextPrefix.utf8.count) + bytes
+  }
+  guard size > 0 else { throw .empty }
+  let maximum = options.transport == .udp
+    ? CECConstants.maximumUDPPayloadBytes : CECConstants.maximumTCPBatchBytes
+  guard size <= maximum else { throw .empty }
+  return Int(size)
+}
+
+package func cecFillPattern(
+  options: borrowing CECOptions, destination: inout MutableSpan<UInt8>
+) throws(CECPatternError) {
+  let count = try cecPatternByteCount(options: options)
+  guard destination.count == count else { throw .empty }
+  if options.patternKind == .binaryCounter {
+    cecFillBinaryPattern(&destination)
+    return
+  }
+  if options.patternKind == .printableCounter {
+    cecFillPrintablePattern(&destination)
+    return
+  }
+  let prefix: InlineArray<10, UInt8> = [101, 99, 104, 111, 32, 102, 114, 111, 109, 32]
+  let prefixCount = options.patternKind == .defaultText ? prefix.count : 0
+  let text = options.patternKind == .literalText ? options.literalPatternUTF16 : options.hostUTF16
+  let written = destination.withUnsafeMutableBufferPointer { output in
+    for index in 0..<prefixCount { output[index] = prefix[index] }
+    if text.isEmpty { return prefixCount }
+    let result = text.withUnsafeBufferPointer { input in
+      unsafe WideCharToMultiByte(
+        UINT(CP_UTF8), DWORD(WC_ERR_INVALID_CHARS), input.baseAddress, Int32(input.count),
+        UnsafeMutableRawPointer(output.baseAddress!.advanced(by: prefixCount))
+          .assumingMemoryBound(to: CChar.self), Int32(count - prefixCount), nil, nil)
+    }
+    return result > 0 ? prefixCount + Int(result) : 0
+  }
+  guard written == count else { throw .invalidUTF16 }
+}
 private let printableDivisors: InlineArray<8, Int> =
   [10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1]
 @inline(__always)
@@ -27,7 +78,7 @@ package func cecFillRepeatedPattern(
   }
 }
 // Called only inside the owners' synchronous buffer borrows. Inputs contain
-// initialized UInt8s; the initial source and destination must be disjoint.
+// initialized UInt8s; the initial source and destination must be disjoint or the same initialized prefix.
 package func cecCopyRepeatedBytes(
   destination: UnsafeMutableBufferPointer<UInt8>, pattern: UnsafeBufferPointer<UInt8>
 ) {
@@ -46,6 +97,7 @@ package func cecCopyRepeatedBytes(
 package func cecBuildPattern(options: borrowing CECOptions) throws(CECPatternError) -> UniqueArray<
   UInt8
 > {
+  _ = try cecPatternByteCount(options: options)
   if options.patternKind == .binaryCounter || options.patternKind == .printableCounter {
     return UniqueArray<UInt8>(capacity: Int(options.patternBytes)) { output in
       for i in 0..<Int(options.patternBytes) {
@@ -92,4 +144,20 @@ package func cecMaximumAttemptBytes(options: borrowing CECOptions, patternBytes:
     batch <= CECConstants.maximumTCPBatchBytes
   else { return nil }
   return batch
+}
+
+/// Immutable startup payload. Worker calls borrow it only for synchronous initialization copies;
+/// completed RIO requests use each worker's independent registered windows.
+package final class CECPatternStorage {
+  private let storage: UniqueArray<UInt8>
+  package var bytes: UniqueArray<UInt8> { borrow { storage } }
+  package init(_ bytes: consuming UniqueArray<UInt8>) { storage = bytes }
+  package func fill(_ destination: inout MutableSpan<UInt8>) {
+    let pattern = Ref(bytes)
+    pattern.value.span.withUnsafeBufferPointer { input in
+      destination.withUnsafeMutableBufferPointer { output in
+        unsafe cecCopyRepeatedBytes(destination: output, pattern: input)
+      }
+    }
+  }
 }

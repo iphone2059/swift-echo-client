@@ -45,10 +45,10 @@ import ucrt
       phase: "final", options: CECOptions(), metrics: snapshot, elapsedMilliseconds: 0)
     #expect(
       line.hasPrefix(
-        "final elapsed_ms=0 sessions=1 echoed=3 corrupted=0 lost=0 network_errors=0 bytes=1024 echo_per_sec=3000.00 MiB_per_sec=0.98 "
+        "final elapsed_ms=0 sessions=1 active=0 attempted=0 pending=0 echoed=3 corrupted=0 lost=0 cancelled=0 sent_bytes=0 received_bytes=0 bytes=1024 connections=0 reconnects=0 network_errors=0 echo_per_sec=3000.00 MiB_per_sec=0.98 "
       ))
     #expect(line.hasSuffix("latency_sample=batch"))
-    #expect(line.contains("p50_us~2 p99_us~2 p999_us~2 max_us~2"))
+    #expect(line.contains("p50_us~2 p99_us~2 p999_us~2 mean_us=2 max_us~2"))
     let old = setlocale(LC_NUMERIC, nil).map { String(cString: $0) } ?? "C"
     _ = setlocale(LC_NUMERIC, "German_Germany.1252")
     let commaLocaleLine = cecMetricsLine(

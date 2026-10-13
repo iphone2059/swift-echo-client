@@ -20,6 +20,22 @@ import WinSDK
             port: UInt16(CommandLine.arguments.dropFirst(2).first ?? "0") ?? 0
           ).rawValue))
     case "arena_capacity": ExitProcess(UInt32(cecExerciseArenaCapacity().rawValue))
+    case "e2e_missing_completion", "e2e_cancel_positive":
+      guard let port = UInt16(CommandLine.arguments.dropFirst(2).first ?? "") else { ExitProcess(1) }
+      cecExerciseRealCancelledCompletion(port: port, hide: CommandLine.arguments[1] == "e2e_missing_completion")
+    case "missing_rio_completion": cecExerciseMissingCompletion(positive: false, connect: false)
+    case "missing_connect_completion": cecExerciseMissingCompletion(positive: false, connect: true)
+    case "drain_rio_positive": cecExerciseMissingCompletion(positive: true, connect: false)
+    case "drain_connect_positive": cecExerciseMissingCompletion(positive: true, connect: true)
+    case "worker_slot_ownership": cecExerciseSlotOwnership()
+    case "worker_not_started": cecExerciseReleaseBoundary(positive: false, stackOrder: false)
+    case "worker_release_order": cecExerciseReleaseBoundary(positive: false, stackOrder: true)
+    case "worker_release_positive": cecExerciseReleaseBoundary(positive: true, stackOrder: false)
+    case "join_barrier_failure": cecExerciseJoinBarrier(positive: false)
+    case "join_barrier_positive": cecExerciseJoinBarrier(positive: true)
+    case "stale_generation", "duplicate_operation", "posted_extent", "socket_identity", "operation_positive":
+      cecExerciseOperationFault(mode: CommandLine.arguments[1])
+    case "config_layout": print("configuration_bytes=\(MemoryLayout<CECWorkerConfiguration>.size)")
     case "normal":
       cecRequireRIONotifySuccess(0, stage: "normal")
       _ = cecRequireValidDequeueCount(0, stage: "normal")
