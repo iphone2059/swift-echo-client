@@ -16,6 +16,7 @@ private struct ArbitrationTrace: Sendable {
   var receivedPosts = 0
   var sentPosts = 0
   var closingCalls: [Bool] = []
+  var stopDuringDrain = false
 }
 private let arbitrationTrace = Mutex(ArbitrationTrace())
 @Suite(.serialized) struct CECDrainTests {
@@ -157,6 +158,132 @@ private let arbitrationTrace = Mutex(ArbitrationTrace())
     #expect(
       w.pointee.transport.notifyDeliveries == 1
         && w.pointee.transport.notifyArms == (stopFirst ? 1 : 2))
+  }
+
+  // Mirror of the C++ pure runtime case cec_runtime_test_stop_during_direct_drain: a stop
+  // published while the direct CQ drain runs must win over the timeout decision that was
+  // already sampled, while the same drain without a stop still expires the due attempt.
+  @Test(arguments: [false, true]) func stopPublishedDuringDirectDrainWinsOverDueTimeout(
+    stopDuringDrain: Bool
+  ) throws {
+    var rio = RIO_EXTENSION_FUNCTION_TABLE()
+    rio.RIOReceive = { _, _, _, _, _ in true }
+    rio.RIOSend = { _, _, _, _, _ in true }
+    rio.RIONotify = { _ in 0 }
+    rio.RIODequeueCompletion = { _, results, capacity in
+      arbitrationTrace.withLock { trace in
+        trace.calls += 1
+        let w = UnsafeMutablePointer<CECEngineWorker>(bitPattern: trace.worker)!
+        let s = w.pointee.sessionAddress!
+        // Published inside the direct drain, after the decision timestamp was sampled.
+        if trace.calls == 1 && trace.stopDuringDrain {
+          w.pointee.configuration.control.stopRequested.store(true, ordering: .releasing)
+        }
+        // The drain under test reports an empty queue, so only the timeout decision under
+        // the frozen timestamp can act on the due attempt.
+        if trace.calls == 1 || s.pointee.outstanding == 0 || trace.calls > 8 { return 0 }
+        precondition(capacity >= 2 && s.pointee.outstanding == 2)
+        results![0] = RIORESULT()
+        results![0].RequestContext = UInt64(UInt(bitPattern: cecReceiveRequest(s)))
+        results![0].SocketContext = UInt64(UInt(bitPattern: s))
+        results![0].Status = 995
+        results![1] = RIORESULT()
+        results![1].RequestContext = UInt64(UInt(bitPattern: cecSendRequest(s)))
+        results![1].SocketContext = UInt64(UInt(bitPattern: s))
+        results![1].Status = 995
+        return 2
+      }
+    }
+    let control = CECSharedControl()
+    var options = CECOptions()
+    options.transport = .tcp
+    options.echoCount = 0
+    options.timeoutSeconds = 30
+    var pattern = UniqueArray<UInt8>()
+    pattern.append(42)
+    let owner = CECWorkerOwner(
+      configuration: CECWorkerConfiguration(
+        options: options, remoteAddress: SOCKADDR_IN(),
+        extensions: CECNativeExtensions(rio: rio, connectEx: nil),
+        pattern: CECPatternStorage(consume pattern), maximumAttemptBytes: 1,
+        control: control, workerIndex: 0, sessionCount: 1, memoryShare: 2))
+    let w = owner.baseAddress
+    #expect(QueryPerformanceFrequency(&w.pointee.performanceFrequency))
+    w.pointee.core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 1,
+      frequency: UInt64(w.pointee.performanceFrequency.QuadPart))
+    guard let sessions = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
+      let notification = CECPinnedStorage(count: 1, initialValue: OVERLAPPED()),
+      let memory = VirtualAlloc(
+        nil, 4096, DWORD(UInt32(MEM_COMMIT) | UInt32(MEM_RESERVE)), DWORD(UInt32(PAGE_READWRITE)))
+    else {
+      Issue.record("allocation")
+      return
+    }
+    w.pointee.sessionAddress = sessions.baseAddress
+    let first = UInt(bitPattern: sessions.baseAddress)
+    w.pointee.sessionRange = first..<(first + UInt(MemoryLayout<CECEngineSession>.stride))
+    w.pointee.resources.sessions = consume sessions
+    w.pointee.notificationAddress = notification.baseAddress
+    w.pointee.resources.notification = consume notification
+    w.pointee.resources.arena.reset(memory, byteCount: 4096)
+    w.pointee.memory = memory.assumingMemoryBound(to: UInt8.self)
+    w.pointee.memory![0] = 42
+    w.pointee.memory![1] = 42
+    w.pointee.resources.port.reset(CreateIoCompletionPort(HANDLE(bitPattern: -1), nil, 0, 1))
+    guard w.pointee.resources.port.rawValue != nil else {
+      Issue.record("IOCP allocation")
+      return
+    }
+    let s = w.pointee.sessionAddress!
+    s.pointee.owner = w
+    s.pointee.generation = 1
+    s.pointee.sendOutstanding = true
+    s.pointee.receiveOutstanding = true
+    s.pointee.sendPostedBytes = 1
+    s.pointee.receivePostedBytes = 1
+    s.pointee.receiveArenaOffset = 1
+    w.pointee.transport.totalOutstanding = 2
+    w.pointee.transport.rioOutstanding = 2
+    w.pointee.transport.notificationArmed = true
+    w.pointee.transport.notifyArms = 1
+    w.pointee.core.sessions[0].state = .active
+    w.pointee.core.sessions[0].claimed = 1
+    w.pointee.core.sessions[0].requestedEchoes = 1
+    w.pointee.core.sessions[0].attemptBytes = 1
+    w.pointee.core.sessions[0].attemptAccounted = false
+    w.pointee.core.sessions[0].receivePosted = true
+    w.pointee.core.sessions[0].activeCounted = true
+    w.pointee.core.metrics.claimed = 1
+    w.pointee.core.metrics.active = 1
+    // The attempt deadline is already due when the arbitration starts, so the timeout
+    // decision is available to whichever branch the stop observation selects.
+    let scheduled = w.pointee.timers.insertOrUpdate(sessionIndex: 0, deadline: 0)
+    #expect(scheduled)
+    arbitrationTrace.withLock {
+      $0 = ArbitrationTrace(worker: UInt(bitPattern: w), stopDuringDrain: stopDuringDrain)
+    }
+    cecArbitrateQueuedTimers(w)
+    #expect(arbitrationTrace.withLock { $0 }.calls >= 1)
+    let stopping = w.pointee.stopping
+    if stopDuringDrain {
+      #expect(stopping)
+      #expect(w.pointee.metrics.lost == 0 && w.pointee.metrics.networkErrors == 0)
+      #expect(w.pointee.metrics.cancelled == 1 && w.pointee.metrics.echoed == 0)
+      #expect(w.pointee.core.sessions[0].state == .closing)
+    } else {
+      #expect(!stopping)
+      #expect(w.pointee.metrics.lost == 1 && w.pointee.metrics.networkErrors == 1)
+      #expect(w.pointee.metrics.cancelled == 0 && w.pointee.metrics.echoed == 0)
+    }
+    // Retire the provider operations that remain after the decision so the owner's release
+    // guard sees a fully accounted transport, exactly like the C++ runtime case.
+    var drains = 0
+    while w.pointee.transport.totalOutstanding != 0 && drains < 8 {
+      cecDrainCompletions(w)
+      drains += 1
+    }
+    #expect(w.pointee.transport.totalOutstanding == 0 && s.pointee.outstanding == 0)
   }
 
   @Test(arguments: [false, true]) func continuouslyNonemptyQueueServicesControl(fatal: Bool) throws
