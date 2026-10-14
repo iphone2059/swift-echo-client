@@ -1,9 +1,14 @@
 import WinSDK
 
-package enum CECPatternError: Error, Equatable { case invalidUTF16, empty, allocationFailure }
-
 /// Payload sizing is pure and performs no allocation. Production may allocate the returned extent
 /// through a fallible native owner, then fill its synchronous mutable view.
+
+// Called only inside the owners' synchronous buffer borrows. Inputs contain
+// initialized UInt8s; the initial source and destination must be disjoint or the same initialized prefix.
+
+/// Immutable startup payload. Worker calls borrow it only for synchronous initialization copies;
+/// completed RIO requests use each worker's independent registered windows.
+package enum CECPatternError: Error, Equatable { case invalidUTF16, empty, allocationFailure }
 package func cecPatternByteCount(options: borrowing CECOptions) throws(CECPatternError) -> Int {
   let size: UInt64
   switch options.patternKind {
@@ -17,12 +22,12 @@ package func cecPatternByteCount(options: borrowing CECOptions) throws(CECPatter
     size = UInt64(CECConstants.defaultTextPrefix.utf8.count) + bytes
   }
   guard size > 0 else { throw .empty }
-  let maximum = options.transport == .udp
+  let maximum =
+    options.transport == .udp
     ? CECConstants.maximumUDPPayloadBytes : CECConstants.maximumTCPBatchBytes
   guard size <= maximum else { throw .empty }
   return Int(size)
 }
-
 package func cecFillPattern(
   options: borrowing CECOptions, destination: inout MutableSpan<UInt8>
 ) throws(CECPatternError) {
@@ -40,7 +45,7 @@ package func cecFillPattern(
   let prefixCount = options.patternKind == .defaultText ? prefix.count : 0
   let text = options.patternKind == .literalText ? options.literalPatternUTF16 : options.hostUTF16
   let written = destination.withUnsafeMutableBufferPointer { output in
-    for index in 0..<prefixCount { output[index] = prefix[index] }
+    for index in 0..<prefixCount { unsafe output[index] = prefix[index] }
     if text.isEmpty { return prefixCount }
     let result = text.withUnsafeBufferPointer { input in
       unsafe WideCharToMultiByte(
@@ -77,8 +82,6 @@ package func cecFillRepeatedPattern(
     }
   }
 }
-// Called only inside the owners' synchronous buffer borrows. Inputs contain
-// initialized UInt8s; the initial source and destination must be disjoint or the same initialized prefix.
 package func cecCopyRepeatedBytes(
   destination: UnsafeMutableBufferPointer<UInt8>, pattern: UnsafeBufferPointer<UInt8>
 ) {
@@ -97,6 +100,13 @@ package func cecCopyRepeatedBytes(
 package func cecBuildPattern(options: borrowing CECOptions) throws(CECPatternError) -> UniqueArray<
   UInt8
 > {
+  // The cold fixture builder accepts an empty counter buffer. Production/CLI
+  // capacity validation still rejects an empty payload in cecPatternByteCount.
+  if (options.patternKind == .binaryCounter || options.patternKind == .printableCounter)
+    && options.patternBytes == 0
+  {
+    return UniqueArray<UInt8>()
+  }
   _ = try cecPatternByteCount(options: options)
   if options.patternKind == .binaryCounter || options.patternKind == .printableCounter {
     return UniqueArray<UInt8>(capacity: Int(options.patternBytes)) { output in
@@ -145,9 +155,6 @@ package func cecMaximumAttemptBytes(options: borrowing CECOptions, patternBytes:
   else { return nil }
   return batch
 }
-
-/// Immutable startup payload. Worker calls borrow it only for synchronous initialization copies;
-/// completed RIO requests use each worker's independent registered windows.
 package final class CECPatternStorage {
   private let storage: UniqueArray<UInt8>
   package var bytes: UniqueArray<UInt8> { borrow { storage } }

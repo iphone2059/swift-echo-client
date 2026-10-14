@@ -7,7 +7,6 @@ import WinSDK
 private struct FeatureCell: ~Copyable {
   var value: UInt64
 }
-
 private struct FeatureWrapper: ~Copyable {
   private var storage: FeatureCell
   init(_ value: UInt64) { storage = FeatureCell(value: value) }
@@ -16,7 +15,6 @@ private struct FeatureWrapper: ~Copyable {
     mutate { &storage }
   }
 }
-
 @Suite struct CECOwnershipFeatureTests {
   @Test func nativeWidths() {
     #expect(MemoryLayout<UInt>.size == 8)

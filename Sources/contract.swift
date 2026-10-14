@@ -1,8 +1,19 @@
-import WinSDK
-
 // MARK: - Binary contract (echo-binary-contract-v1)
 
 /// Diagnostic tokens that must follow "Invalid arguments: " on stderr.
+import WinSDK
+
+/// Which protocol a switch belongs to; a switch used with the wrong one is a usage error.
+
+/// One value switch: its name, the range it accepts and the protocol it applies to.
+
+/// The accepted value switches, as value data: one place for names, ranges and protocol scope.
+
+/// The usage text: stdout for a valid /h, stderr for a usage error.
+
+/// Workers the reference would create: /threads, or the active processor count clamped to [1, 64],
+/// and never more than there are sessions. The contract owns the rule so the parser's capacity
+/// budgets and the run's actual split can never disagree.
 package enum CECArgumentToken {
   package static let protocolOption = "protocol-option"
   package static let invalidNumber = "invalid-number"
@@ -21,19 +32,13 @@ package enum CECArgumentToken {
   package static let unexpectedTarget = "unexpected-target"
   package static let invalidUTF16 = "invalid-utf16"
 }
-
-/// Which protocol a switch belongs to; a switch used with the wrong one is a usage error.
 package enum CECSwitchScope { case both, tcpOnly, udpOnly }
-
-/// One value switch: its name, the range it accepts and the protocol it applies to.
 package struct CECSwitch {
   package let name: String
   package let minimum: UInt64
   package let maximum: UInt64
   package let scope: CECSwitchScope
 }
-
-/// The accepted value switches, as value data: one place for names, ranges and protocol scope.
 package enum CECSwitchTable {
   package static let valueSwitches: [CECSwitch] = [
     CECSwitch(name: "r", minimum: 1, maximum: 65_535, scope: .both),
@@ -58,21 +63,19 @@ package enum CECSwitchTable {
     valueSwitches.first { $0.name == name }
   }
 }
-
-/// The usage text: stdout for a valid /h, stderr for a usage error.
-package let cecUsageText = """
-Usage: swift-echo-client target /p tcp|udp [/r port] [/l port] [/n count] [/t seconds] [/i ms]
-       [/d text | /z bytes | /zt bytes] [/k depth] [/c sessions]
-       [/threads workers] [/w seconds] [/rc [seconds]] [/report seconds]
-       [/b bytes] [/cq capacity] [/memory bytes] [/q] [/stats] [/h]
-/n count: attempts per session; 0 means unlimited.
-/k depth: TCP requests in flight per session; UDP rejects /k.
-/threads 0: automatic workers, min(sessions, active processors, 64).
-/rc [seconds]: reconnect after failure; bare /rc means 1 second.
-/w 0: no run limit. /report 0: no periodic reports.
-/q suppresses the default final; /stats forces final; /h shows help.
-
-"""
+package let cecUsageText = [
+  "Usage: swift-echo-client target /p tcp|udp [/r port] [/l port] [/n count] [/t seconds] [/i ms]",
+  "       [/d text | /z bytes | /zt bytes] [/k depth] [/c sessions]",
+  "       [/threads workers] [/w seconds] [/rc [seconds]] [/report seconds]",
+  "       [/b bytes] [/cq capacity] [/memory bytes] [/q] [/stats] [/h]",
+  "/n count: attempts per session; 0 means unlimited.",
+  "/k depth: TCP requests in flight per session; UDP rejects /k.",
+  "/threads 0: automatic workers, min(sessions, active processors, 64).",
+  "/rc [seconds]: reconnect after failure; bare /rc means 1 second.",
+  "/w 0: no run limit. /report 0: no periodic reports.",
+  "/q suppresses the default final; /stats forces final; /h shows help.",
+  "",
+].joined(separator: "\n")
 package func cecCheckedProduct(_ a: UInt64, _ b: UInt64) -> UInt64? {
   let (value, overflow) = a.multipliedReportingOverflow(by: b)
   return overflow ? nil : value
@@ -93,7 +96,8 @@ package func cecCheckedSharedStorageBytes(
 ) -> UInt64? {
   guard sessions > 0, workers > 0, workers <= sessions, batchBytes > 0 else { return nil }
   guard let regions = cecCheckedProduct(sessions, 2),
-    let bytes = cecCheckedProduct(regions, batchBytes), bytes <= memoryLimit else {
+    let bytes = cecCheckedProduct(regions, batchBytes), bytes <= memoryLimit
+  else {
     return nil
   }
   return bytes
@@ -301,7 +305,8 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
     guard let hostBytes = cecUTF8ByteCount(o.hostUTF16) else {
       throw CECArgumentError(message: CECArgumentToken.invalidUTF16)
     }
-    patternBytes = o.hostUTF16.isEmpty ? 0 : UInt64(CECConstants.defaultTextPrefix.utf8.count) + hostBytes
+    patternBytes =
+      o.hostUTF16.isEmpty ? 0 : UInt64(CECConstants.defaultTextPrefix.utf8.count) + hostBytes
   }
   if o.transport == .udp && patternBytes > CECConstants.maximumUDPPayloadBytes {
     throw CECArgumentError(message: CECArgumentToken.payloadSize)
@@ -336,10 +341,6 @@ package func cecParseOptions(_ arguments: [[UInt16]]) throws(CECArgumentError) -
   }
   return o
 }
-
-/// Workers the reference would create: /threads, or the active processor count clamped to [1, 64],
-/// and never more than there are sessions. The contract owns the rule so the parser's capacity
-/// budgets and the run's actual split can never disagree.
 package func cecResolveWorkerCount(configured: UInt32, sessions: UInt32) -> UInt64 {
   if sessions == 0 { return 1 }
   var workers = UInt64(configured)

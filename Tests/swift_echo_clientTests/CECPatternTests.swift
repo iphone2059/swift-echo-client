@@ -13,8 +13,9 @@ import Testing
       for length in [0, 1, 2, 3, 8, 9, 10, 17, 65_537, 1_048_576] {
         var destination = [UInt8](repeating: 0xAB, count: length + 2)
         destination.withUnsafeMutableBufferPointer { buffer in
-          var view = MutableSpan(_unsafeElements:
-            UnsafeMutableBufferPointer(rebasing: buffer[1..<(length + 1)]))
+          var view = MutableSpan(
+            _unsafeElements:
+              UnsafeMutableBufferPointer(rebasing: buffer[1..<(length + 1)]))
           cecFillRepeatedPattern(destination: &view, pattern: pattern.span)
         }
         #expect(destination.first == 0xAB && destination.last == 0xAB)

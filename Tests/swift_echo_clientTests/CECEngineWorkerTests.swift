@@ -20,9 +20,11 @@ import WinSDK
       control: control, workerIndex: 0, sessionCount: 1, memoryShare: 2)
     let owner = CECWorkerOwner(configuration: config)
     let w = owner.baseAddress
-    w.pointee.core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 1, frequency: 1000)
+    w.pointee.core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 1, frequency: 1000)
     guard let sessions = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
-      let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_COMMIT) | UInt32(MEM_RESERVE)), DWORD(UInt32(PAGE_READWRITE)))
+      let memory = VirtualAlloc(
+        nil, 4096, DWORD(UInt32(MEM_COMMIT) | UInt32(MEM_RESERVE)), DWORD(UInt32(PAGE_READWRITE)))
     else {
       Issue.record("allocation")
       return
@@ -54,7 +56,6 @@ import WinSDK
     w.pointee.core.sessions[0].activeCounted = true
     w.pointee.core.metrics.claimed = 1
     w.pointee.core.metrics.active = 1
-
 
     w.pointee.memory![0] = 42
     w.pointee.memory![1] = 42

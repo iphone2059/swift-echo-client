@@ -1,3 +1,4 @@
+import Foundation
 import Synchronization
 import WinSDK
 import ucrt
@@ -7,14 +8,21 @@ import ucrt
 // GetAddrInfoW owns its result chain until FreeAddrInfoW; the CRT owns argv and
 // guarantees NUL termination. No temporary address is used for async requests.
 
+// Preparation-only static specialization permits deterministic lifecycle/error
+// fixtures without runtime switches or dispatch in any request/completion path.
+
+// Console callbacks may overlap removal. The mutex protects only publication of the
+// shared atomic container, whose retained reference outlives each callback.
+
 package struct CECNativeError: Error {
-  package let stage: String
+  package let stage: StaticString
   package let code: Int32
   package var domain: CECFailureDomain = .winsock
   package var category: CECFailureCategory = .connection
   package var retryable = false
   package var failure: CECFailure {
-    CECFailure(classification: .network, domain: domain, stage: stage, code: code,
+    CECFailure(
+      classification: .network, domain: domain, stage: stage, code: code,
       category: category, retryable: retryable)
   }
 }
@@ -32,9 +40,49 @@ package struct CECWinSockOwner: ~Copyable {
   package init() throws(CECNativeError) {
     var data = unsafe WSADATA()
     let status = unsafe WSAStartup(0x0202, &data)
-    if status != 0 { throw CECNativeError(stage: "WSAStartup", code: status, category: .initialization) }
+    if status != 0 {
+      throw CECNativeError(stage: "WSAStartup", code: status, category: .initialization)
+    }
   }
   deinit { WSACleanup() }
+}
+package protocol CECTimerPeriodAPI {
+  func begin(_ period: UInt32) -> UInt32
+  func end(_ period: UInt32)
+}
+package struct CECNativeTimerPeriodAPI: CECTimerPeriodAPI {
+  package func begin(_ period: UInt32) -> UInt32 { timeBeginPeriod(period) }
+  package func end(_ period: UInt32) { _ = timeEndPeriod(period) }
+}
+package struct CECTimerResolutionOwner<A: CECTimerPeriodAPI>: ~Copyable {
+  private let api: A
+  private let active: Bool
+  package init(intervalMilliseconds: UInt32, api: A) throws(CECNativeError) {
+    self.api = api
+    if intervalMilliseconds == 0 {
+      active = false
+      return
+    }
+    let status = api.begin(1)
+    guard status == 0 else {
+      throw CECNativeError(
+        stage: "timeBeginPeriod(client pacing)", code: Int32(bitPattern: status),
+        domain: .win32, category: .initialization)
+    }
+    active = true
+  }
+  package borrowing func keepAlive() {}
+  deinit { if active { api.end(1) } }
+}
+package func cecPrepareTimerResolution<A: CECTimerPeriodAPI>(intervalMilliseconds: UInt32, api: A)
+  -> CECTimerResolutionOwner<A>?
+{
+  do {
+    return try CECTimerResolutionOwner(intervalMilliseconds: intervalMilliseconds, api: api)
+  } catch {
+    cecReport(stage: error.stage, error: error.code)
+    return nil
+  }
 }
 package func cecRegisteredSocket(transport: CECTransport) -> SOCKET {
   WSASocketW(
@@ -45,7 +93,8 @@ package func cecRegisteredSocket(transport: CECTransport) -> SOCKET {
 package func cecLoadExtensions() throws(CECNativeError) -> CECNativeExtensions {
   let owner = CECSocketOwner(cecRegisteredSocket(transport: .tcp))
   guard owner.rawValue != ~SOCKET(0) else {
-    throw CECNativeError(stage: "WSASocketW(RIO probe)", code: WSAGetLastError(), category: .initialization)
+    throw CECNativeError(
+      stage: "WSASocketW(RIO probe)", code: WSAGetLastError(), category: .initialization)
   }
   var rio = RIO_EXTENSION_FUNCTION_TABLE()
   rio.cbSize = DWORD(MemoryLayout<RIO_EXTENSION_FUNCTION_TABLE>.size)
@@ -59,13 +108,17 @@ package func cecLoadExtensions() throws(CECNativeError) -> CECNativeExtensions {
       DWORD(MemoryLayout<RIO_EXTENSION_FUNCTION_TABLE>.size), &bytes, nil, nil) == 0
   else {
     throw CECNativeError(
-      stage: "SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER(RIO)", code: WSAGetLastError(), category: .initialization)
+      stage: "SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER(RIO)", code: WSAGetLastError(),
+      category: .initialization)
   }
-  guard unsafe rio.RIOReceive != nil, rio.RIOSend != nil, rio.RIOCreateCompletionQueue != nil,
-    rio.RIOCloseCompletionQueue != nil, rio.RIOCreateRequestQueue != nil,
-    rio.RIORegisterBuffer != nil, rio.RIODeregisterBuffer != nil,
-    rio.RIODequeueCompletion != nil, rio.RIONotify != nil else {
-    throw CECNativeError(stage: "RIO table entry points", code: 13, domain: .invariant, category: .initialization)
+  guard unsafe rio.RIOReceive != nil, unsafe rio.RIOSend != nil,
+    unsafe rio.RIOCreateCompletionQueue != nil,
+    unsafe rio.RIOCloseCompletionQueue != nil, unsafe rio.RIOCreateRequestQueue != nil,
+    unsafe rio.RIORegisterBuffer != nil, unsafe rio.RIODeregisterBuffer != nil,
+    unsafe rio.RIODequeueCompletion != nil, unsafe rio.RIONotify != nil
+  else {
+    throw CECNativeError(
+      stage: "RIO table entry points", code: 13, domain: .invariant, category: .initialization)
   }
   var connectID = GUID(
     Data1: 0x25a2_07b9, Data2: 0xddf3, Data3: 0x4660,
@@ -78,7 +131,8 @@ package func cecLoadExtensions() throws(CECNativeError) -> CECNativeExtensions {
     unsafe connectEx != nil
   else {
     throw CECNativeError(
-      stage: "SIO_GET_EXTENSION_FUNCTION_POINTER(ConnectEx)", code: WSAGetLastError(), category: .initialization)
+      stage: "SIO_GET_EXTENSION_FUNCTION_POINTER(ConnectEx)", code: WSAGetLastError(),
+      category: .initialization)
   }
   return unsafe CECNativeExtensions(rio: rio, connectEx: connectEx)
 }
@@ -100,7 +154,9 @@ package func cecResolveIPv4(hostUTF16: [UInt16], port: UInt16) throws(CECNativeE
   }
   return unsafe UnsafeRawPointer(addr).load(as: SOCKADDR_IN.self)
 }
-package func cecConfigureSocketChecked(_ socket: SOCKET, options: borrowing CECOptions) throws(CECNativeError) {
+package func cecConfigureSocketChecked(_ socket: SOCKET, options: borrowing CECOptions)
+  throws(CECNativeError)
+{
   if options.socketBufferBytes > 0 {
     var size = Int32(options.socketBufferBytes)
     let status = withUnsafePointer(to: &size) { pointer in
@@ -108,29 +164,47 @@ package func cecConfigureSocketChecked(_ socket: SOCKET, options: borrowing CECO
       return unsafe setsockopt(socket, SOL_SOCKET, SO_SNDBUF, bytes, 4) == 0
         && setsockopt(socket, SOL_SOCKET, SO_RCVBUF, bytes, 4) == 0
     }
-    if !status { throw CECNativeError(stage: "setsockopt(SO_SNDBUF/SO_RCVBUF)", code: WSAGetLastError(), retryable: true) }
+    if !status {
+      throw CECNativeError(
+        stage: "setsockopt(SO_SNDBUF/SO_RCVBUF)", code: WSAGetLastError(), retryable: true)
+    }
   }
   if options.transport == .tcp {
     var enabled: Int32 = 1
     let status = withUnsafePointer(to: &enabled) {
-      unsafe setsockopt(socket, Int32(IPPROTO_TCP.rawValue), TCP_NODELAY,
+      unsafe setsockopt(
+        socket, Int32(IPPROTO_TCP.rawValue), TCP_NODELAY,
         UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self), 4)
     }
-    if status != 0 { throw CECNativeError(stage: "setsockopt(TCP_NODELAY)", code: WSAGetLastError(), retryable: true) }
+    if status != 0 {
+      throw CECNativeError(
+        stage: "setsockopt(TCP_NODELAY)", code: WSAGetLastError(), retryable: true)
+    }
   }
 }
 package func cecConfigureSocket(_ socket: SOCKET, options: borrowing CECOptions) -> Bool {
-  do { try cecConfigureSocketChecked(socket, options: options); return true }
-  catch { cecReport(stage: error.stage, error: error.code); return false }
+  do {
+    try cecConfigureSocketChecked(socket, options: options)
+    return true
+  } catch {
+    cecReport(stage: error.stage, error: error.code)
+    return false
+  }
 }
 package func cecWindowsArguments() throws(CECNativeError) -> [[UInt16]] {
   guard _configure_wide_argv(_crt_argv_unexpanded_arguments) == 0,
     let argv = unsafe __p___wargv().pointee
-  else { throw CECNativeError(stage: "wide argv", code: 87, domain: .invariant, category: .initialization) }
+  else {
+    throw CECNativeError(
+      stage: "wide argv", code: 87, domain: .invariant, category: .initialization)
+  }
   let count = unsafe __p___argc().pointee
   var result: [[UInt16]] = []
   for i in 0..<Int(count) {
-    guard let token = unsafe argv[i] else { throw CECNativeError(stage: "wide argv", code: 87, domain: .invariant, category: .initialization) }
+    guard let token = unsafe argv[i] else {
+      throw CECNativeError(
+        stage: "wide argv", code: 87, domain: .invariant, category: .initialization)
+    }
     var value: [UInt16] = []
     var n = 0
     while unsafe token[n] != 0 {
@@ -141,8 +215,6 @@ package func cecWindowsArguments() throws(CECNativeError) -> [[UInt16]] {
   }
   return result
 }
-// Console callbacks may overlap removal. The mutex protects only publication of the
-// shared atomic container, whose retained reference outlives each callback.
 private let consoleControl = Mutex<CECSharedControl?>(nil)
 private func consoleHandler(_ type: DWORD) -> WindowsBool {
   guard
@@ -161,7 +233,8 @@ package struct CECConsoleRegistration: ~Copyable {
     guard SetConsoleCtrlHandler(consoleHandler, true) else {
       consoleControl.withLock { $0 = nil }
       throw CECNativeError(
-        stage: "SetConsoleCtrlHandler", code: Int32(bitPattern: GetLastError()), domain: .win32, category: .initialization)
+        stage: "SetConsoleCtrlHandler", code: Int32(bitPattern: GetLastError()), domain: .win32,
+        category: .initialization)
     }
   }
   deinit {
@@ -170,13 +243,13 @@ package struct CECConsoleRegistration: ~Copyable {
   }
 }
 
-import WinSDK
+// Cold, opt-in observability. The fixed UTF-16 path limit and Win32 file flags
+// match C++/Rust; failed open/write is deliberately independent of client result.
 
-// Native adoption/reset transfers sole ownership; callers must pass a live
-// resource and never reset to its already-owned value. Invalid sentinels are
-// never released. RIO table pointers belong to Winsock, which outlives owners.
-// Arena/CQ/pinned owners are destroyed only after native cancellation drains
-// and the worker joins (cecDestroyWorker enforces the release preconditions).
+// Safe ownership and bounded views; raw adoption/access still has an unsafe
+// pointer signature. The extent must match the adopted Windows allocation.
+
+/// Owns a stable allocation. Native callbacks borrow this address until their owner joins.
 
 package struct CECSocketOwner: ~Copyable {
   package private(set) var rawValue: SOCKET
@@ -213,8 +286,39 @@ package struct CECHandleOwner: ~Copyable {
     }
   }
 }
-// Safe ownership and bounded views; raw adoption/access still has an unsafe
-// pointer signature. The extent must match the adopted Windows allocation.
+@unsafe
+package struct CECNotificationDiagnosticFile: ~Copyable {
+  private let file: CECHandleOwner
+  package init?() {
+    let name: [UInt16] = [67, 69, 67, 95, 68, 73, 65, 71, 95, 70, 73, 76, 69, 0]
+    var path = InlineArray<512, UInt16>(repeating: 0)
+    var view = path.mutableSpan
+    let count = view.withUnsafeMutableBufferPointer { output in
+      name.withUnsafeBufferPointer { input in
+        unsafe GetEnvironmentVariableW(input.baseAddress, output.baseAddress, DWORD(output.count))
+      }
+    }
+    guard count > 0, count < 512 else { return nil }
+    let handle = path.span.withUnsafeBufferPointer { input in
+      unsafe CreateFileW(
+        input.baseAddress, DWORD(GENERIC_WRITE), DWORD(FILE_SHARE_READ), nil,
+        DWORD(CREATE_ALWAYS), DWORD(FILE_ATTRIBUTE_NORMAL), nil)
+    }
+    guard let handle = unsafe handle, unsafe handle != HANDLE(bitPattern: -1) else { return nil }
+    unsafe file = CECHandleOwner(handle)
+  }
+  package borrowing func write(_ line: String) -> Bool {
+    let bytes = Array(line.utf8)
+    // C++ uses a 192-byte line including its terminating NUL; oversized cold
+    // diagnostics are omitted without influencing normal output or exit code.
+    guard bytes.count < 192 else { return true }
+    var written: DWORD = 0
+    return bytes.withUnsafeBufferPointer { input in
+      unsafe WriteFile(file.rawValue, input.baseAddress, DWORD(input.count), &written, nil)
+        && written == DWORD(input.count)
+    }
+  }
+}
 @safe
 package struct CECVirtualArenaOwner: ~Copyable {
   package private(set) var rawValue: UnsafeMutableRawPointer?
@@ -227,7 +331,9 @@ package struct CECVirtualArenaOwner: ~Copyable {
   }
   package mutating func reset(_ value: UnsafeMutableRawPointer? = nil, byteCount: Int = 0) {
     if let rawValue = unsafe rawValue {
-      guard unsafe VirtualFree(rawValue, 0, DWORD(MEM_RELEASE)) else { cecFailFast(stage: "client arena release", error: Int32(bitPattern: GetLastError())) }
+      guard unsafe VirtualFree(rawValue, 0, DWORD(MEM_RELEASE)) else {
+        cecFailFast(stage: "client arena release", error: Int32(bitPattern: GetLastError()))
+      }
     }
     unsafe rawValue = unsafe value
     self.byteCount = unsafe value == nil ? 0 : max(0, byteCount)
@@ -261,7 +367,9 @@ package struct CECVirtualArenaOwner: ~Copyable {
   }
   deinit {
     if let rawValue = unsafe rawValue {
-      guard unsafe VirtualFree(rawValue, 0, DWORD(MEM_RELEASE)) else { cecFailFast(stage: "client arena release", error: Int32(bitPattern: GetLastError())) }
+      guard unsafe VirtualFree(rawValue, 0, DWORD(MEM_RELEASE)) else {
+        cecFailFast(stage: "client arena release", error: Int32(bitPattern: GetLastError()))
+      }
     }
   }
 }
@@ -315,7 +423,6 @@ package struct CECRIOCQOwner: ~Copyable {
   }
   deinit { if let rawValue = unsafe rawValue { unsafe rio.RIOCloseCompletionQueue!(rawValue) } }
 }
-/// Owns a stable allocation. Native callbacks borrow this address until their owner joins.
 @unsafe
 package struct CECPinnedStorage<Element>: ~Copyable {
   package let count: Int
@@ -336,17 +443,28 @@ package struct CECPinnedStorage<Element>: ~Copyable {
   }
 }
 
-import ucrt
+// A synchronous generic borrow keeps noncopyable optional owners in their
+// original storage. Concrete native operations remain explicit at each call.
+package func cecWithOptionalBorrow<Value: ~Copyable, Result>(
+  _ value: borrowing Value?, _ body: (borrowing Value) -> Result
+) -> Result? {
+  switch value {
+  case .some(let value): return body(value)
+  case .none: return nil
+  }
+}
 
-// Offsets are cached at startup; each view checks its attempt's logical extent.
+// Both offset arithmetic and the allocation extent are checked before a view
+// is constructed. These checks preserve the UInt32 RIO arena layout.
+
+// Synchronous native comparison; both spans contain initialized bytes and
+// remain borrowed for the complete call. Empty spans never export nil to C.
+
 package func cecAttemptBufferRange(offset: Int, maximumBytes: Int, count: Int) -> Range<Int>? {
   guard offset >= 0, maximumBytes > 0, count >= 0, count <= maximumBytes else { return nil }
   let (end, overflow) = offset.addingReportingOverflow(count)
   return overflow ? nil : offset..<end
 }
-
-// Both offset arithmetic and the allocation extent are checked before a view
-// is constructed. These checks preserve the UInt32 RIO arena layout.
 package func cecSessionBufferRange(
   index: Int, maximumBytes: Int, count: Int, received: Bool
 ) -> Range<Int>? {
@@ -358,9 +476,6 @@ package func cecSessionBufferRange(
   guard !strideOverflow, !baseOverflow, !startOverflow, !endOverflow else { return nil }
   return start..<end
 }
-
-// Synchronous native comparison; both spans contain initialized bytes and
-// remain borrowed for the complete call. Empty spans never export nil to C.
 package func cecBytesEqual(_ lhs: borrowing Span<UInt8>, _ rhs: borrowing Span<UInt8>) -> Bool {
   guard lhs.count == rhs.count else { return false }
   guard !lhs.isEmpty else { return true }
@@ -371,27 +486,38 @@ package func cecBytesEqual(_ lhs: borrowing Span<UInt8>, _ rhs: borrowing Span<U
   }
 }
 
-import Foundation
-import WinSDK
+// This record contains provider state only. Session decisions live in WorkerCore.
+// It is initialized in a pinned allocation before Windows borrows any address.
 
-package func cecReport(stage: String, error: Int32) {
+// RequestContext is an opaque integer encoded as an address; it is never
+// dereferenced. A completion carries the generation that was posted, rather
+// than rereading mutable request metadata from a reused slot.
+
+/// Fallible fixed capacity owner. Bounded access always borrows the owning value;
+/// no escapable pointer view can outlive its allocation.
+
+// Safe public control interface: the handle never leaves this object, all
+// adoption/access is synchronized, and each wait/signal borrows a live self.
+// The coordinator and workers retain self through join and console unregister.
+
+package func cecReport(stage: StaticString, error: Int32) {
   FileHandle.standardError.write(Data("\(stage) failed: native_error=\(error)\n".utf8))
 }
-package func cecFailFast(stage: String, error: Int32) -> Never {
+package func cecFailFast(stage: StaticString, error: Int32) -> Never {
   cecReport(stage: stage, error: error)
   while true { unsafe TerminateProcess(GetCurrentProcess(), 4) }
 }
-package func cecRequireRIONotifySuccess(_ status: Int32, stage: String) {
+package func cecRequireRIONotifySuccess(_ status: Int32, stage: StaticString) {
   if status == 10037 { cecFailFast(stage: "RIONotify duplicate arm", error: status) }
   if status != 0 { cecFailFast(stage: stage, error: status) }
 }
-package func cecRequireValidDequeueCount(_ count: UInt32, stage: String) -> UInt32 {
+package func cecRequireValidDequeueCount(_ count: UInt32, stage: StaticString) -> UInt32 {
   if count == UInt32.max { cecFailFast(stage: stage, error: 13) }
   return count
 }
 package func cecRequireNotificationPacket(
   key: UInt, overlapped: UnsafePointer<OVERLAPPED>?, expectedKey: UInt,
-  expectedOverlapped: UnsafePointer<OVERLAPPED>?, stage: String
+  expectedOverlapped: UnsafePointer<OVERLAPPED>?, stage: StaticString
 ) {
   if unsafe !cecNotificationPacketMatches(
     key: key, overlapped: overlapped, expectedKey: expectedKey,
@@ -400,15 +526,12 @@ package func cecRequireNotificationPacket(
     cecFailFast(stage: stage, error: 13)
   }
 }
-package func cecRequireOutstanding(_ count: UInt32, stage: String) {
+package func cecRequireOutstanding(_ count: UInt32, stage: StaticString) {
   if count == 0 { cecFailFast(stage: stage, error: 13) }
 }
-package func cecRequireControlPostSuccess(_ succeeded: Bool, error: Int32, stage: String) {
+package func cecRequireControlPostSuccess(_ succeeded: Bool, error: Int32, stage: StaticString) {
   if !succeeded { cecFailFast(stage: stage, error: error) }
 }
-
-// This record contains provider state only. Session decisions live in WorkerCore.
-// It is initialized in a pinned allocation before Windows borrows any address.
 @unsafe
 package struct CECEngineSession {
   package var owner: UnsafeMutablePointer<CECEngineWorker>?
@@ -432,7 +555,7 @@ package struct CECEngineSession {
   package var sendBuffer = unsafe RIO_BUF()
   package var receiveBuffer = unsafe RIO_BUF()
   package var outstanding: UInt32 {
-    UInt32(connectOutstanding ? 1 : 0) + UInt32(sendOutstanding ? 1 : 0)
+    unsafe UInt32(connectOutstanding ? 1 : 0) + UInt32(sendOutstanding ? 1 : 0)
       + UInt32(receiveOutstanding ? 1 : 0)
   }
   package init() {}
@@ -442,67 +565,98 @@ package struct CECEngineRequest {
   package var operation: CECEngineOperation = .receive
 }
 package enum CECRioContext {
-  package static func encode(index: UInt32, generation: UInt32, operation: CECEngineOperation) -> UInt64 {
+  package static func encode(index: UInt32, generation: UInt32, operation: CECEngineOperation)
+    -> UInt64
+  {
     UInt64(index) | (UInt64(generation) << 20) | (UInt64(operation.rawValue + 1) << 52)
   }
   package static func decode(_ context: UInt64) -> (UInt32, UInt32, CECEngineOperation)? {
     guard context >> 55 == 0 else { return nil }
     let tag = UInt8((context >> 52) & 7)
     guard tag != 0, let operation = CECEngineOperation(rawValue: tag - 1) else { return nil }
-    return (UInt32(context & 0xfffff), UInt32((context >> 20) & 0xffffffff), operation)
+    return (UInt32(context & 0xfffff), UInt32((context >> 20) & 0xffff_ffff), operation)
   }
 }
-// RequestContext is an opaque integer encoded as an address; it is never
-// dereferenced. A completion carries the generation that was posted, rather
-// than rereading mutable request metadata from a reused slot.
-package func cecReceiveRequest(_ slot: UnsafeMutablePointer<CECEngineSession>) -> UnsafeMutablePointer<CECEngineRequest> {
-  unsafe UnsafeMutablePointer(bitPattern: UInt(CECRioContext.encode(index: slot.pointee.index,
-    generation: slot.pointee.generation, operation: .receive)))!
+package func cecReceiveRequest(_ slot: UnsafeMutablePointer<CECEngineSession>)
+  -> UnsafeMutablePointer<CECEngineRequest>
+{
+  unsafe UnsafeMutablePointer(
+    bitPattern: UInt(
+      CECRioContext.encode(
+        index: slot.pointee.index,
+        generation: slot.pointee.generation, operation: .receive)))!
 }
-package func cecSendRequest(_ slot: UnsafeMutablePointer<CECEngineSession>) -> UnsafeMutablePointer<CECEngineRequest> {
-  unsafe UnsafeMutablePointer(bitPattern: UInt(CECRioContext.encode(index: slot.pointee.index,
-    generation: slot.pointee.generation, operation: .send)))!
+package func cecSendRequest(_ slot: UnsafeMutablePointer<CECEngineSession>) -> UnsafeMutablePointer<
+  CECEngineRequest
+> {
+  unsafe UnsafeMutablePointer(
+    bitPattern: UInt(
+      CECRioContext.encode(
+        index: slot.pointee.index,
+        generation: slot.pointee.generation, operation: .send)))!
 }
-private let cecConnectOffset: Int = unsafe MemoryLayout<CECEngineSession>.offset(of: \CECEngineSession.connectOverlapped)!
-package func cecConnectOverlapped(_ slot: UnsafeMutablePointer<CECEngineSession>) -> UnsafeMutablePointer<OVERLAPPED> {
-  unsafe UnsafeMutableRawPointer(slot).advanced(by: cecConnectOffset).assumingMemoryBound(to: OVERLAPPED.self)
+private let cecConnectOffset: Int = unsafe MemoryLayout<CECEngineSession>.offset(
+  of: \CECEngineSession.connectOverlapped)!
+package func cecConnectOverlapped(_ slot: UnsafeMutablePointer<CECEngineSession>)
+  -> UnsafeMutablePointer<OVERLAPPED>
+{
+  unsafe UnsafeMutableRawPointer(slot).advanced(by: cecConnectOffset).assumingMemoryBound(
+    to: OVERLAPPED.self)
 }
-package func cecNotificationPacketMatches(key: UInt, overlapped: UnsafePointer<OVERLAPPED>?,
-  expectedKey: UInt, expectedOverlapped: UnsafePointer<OVERLAPPED>?) -> Bool {
+package func cecNotificationPacketMatches(
+  key: UInt, overlapped: UnsafePointer<OVERLAPPED>?,
+  expectedKey: UInt, expectedOverlapped: UnsafePointer<OVERLAPPED>?
+) -> Bool {
   unsafe key == expectedKey && overlapped == expectedOverlapped
 }
 package struct CECNativeClock {
   package var frequency: UInt64
+  package init(frequency: UInt64) { self.frequency = frequency }
   package func nowTicks() -> UInt64 {
     var now = LARGE_INTEGER()
-    guard unsafe QueryPerformanceCounter(&now), now.QuadPart >= 0 else {
-      cecFailFast(stage: "QueryPerformanceCounter(client timer)", error: Int32(bitPattern: GetLastError()))
+    guard unsafe QueryPerformanceCounter(&now), unsafe now.QuadPart >= 0 else {
+      cecFailFast(
+        stage: "QueryPerformanceCounter(client timer)", error: Int32(bitPattern: GetLastError()))
     }
-    return UInt64(now.QuadPart)
+    return unsafe UInt64(now.QuadPart)
   }
 }
-
-/// Fallible fixed capacity owner. Bounded access always borrows the owning value;
-/// no escapable pointer view can outlive its allocation.
 @safe
 package struct CECFixedArray<Element>: ~Copyable {
   private let storage: UnsafeMutablePointer<Element>?
   package let count: Int
-  package init() { unsafe storage = nil; count = 0 }
+  package init() {
+    unsafe storage = nil
+    count = 0
+  }
   package init(count: Int, repeating value: Element) throws(CECFailure) {
-    guard count >= 0, MemoryLayout<Element>.alignment <= 16 else { throw .allocation(stage: "fixed array allocation") }
-    self.count = count
-    if count == 0 { unsafe storage = nil; return }
+    guard count >= 0, MemoryLayout<Element>.alignment <= 16 else {
+      throw .allocation(stage: "fixed array allocation")
+    }
+    if count == 0 {
+      self.count = 0
+      unsafe storage = nil
+      return
+    }
     let (bytes, overflow) = count.multipliedReportingOverflow(by: MemoryLayout<Element>.stride)
-    guard !overflow, let raw = unsafe HeapAlloc(GetProcessHeap(), 0, UInt64(bytes)) else { throw .allocation(stage: "fixed array allocation") }
+    guard !overflow, let raw = unsafe HeapAlloc(GetProcessHeap(), 0, UInt64(bytes)) else {
+      throw .allocation(stage: "fixed array allocation")
+    }
+    self.count = count
     unsafe storage = raw.bindMemory(to: Element.self, capacity: count)
     unsafe storage!.initialize(repeating: value, count: count)
   }
   package var indices: Range<Int> { 0..<count }
   package var isEmpty: Bool { count == 0 }
   package subscript(index: Int) -> Element {
-    get { precondition(index >= 0 && index < count); return unsafe storage![index] }
-    set { precondition(index >= 0 && index < count); unsafe storage![index] = newValue }
+    get {
+      precondition(index >= 0 && index < count)
+      return unsafe storage![index]
+    }
+    set {
+      precondition(index >= 0 && index < count)
+      unsafe storage![index] = newValue
+    }
   }
   deinit {
     if let storage = unsafe storage {
@@ -511,10 +665,6 @@ package struct CECFixedArray<Element>: ~Copyable {
     }
   }
 }
-
-// Safe public control interface: the handle never leaves this object, all
-// adoption/access is synchronized, and each wait/signal borrows a live self.
-// The coordinator and workers retain self through join and console unregister.
 @safe
 package final class CECSharedControl: Sendable {
   package let stopRequested = Atomic<Bool>(false)
@@ -562,7 +712,6 @@ package final class CECSharedControl: Sendable {
     }
   }
 }
-
 package final class CECEngineMetrics: Sendable {
   package let claimed = Atomic<UInt64>(0)
   package init() {}

@@ -37,7 +37,7 @@ foreach ($cecProtocol in $(if ($Transport -eq 'both') { @('tcp','udp') } else { 
         if ($cecProtocol -eq 'tcp') { $cecCommon += @('/k',[string]$TCPDepth) }
         foreach ($cecClient in $cecClients) {
             $cecWarm = Invoke-CECProcess $cecClient.Path ($cecCommon + @('/n','10000')) 10000
-            if ($cecWarm.Code -ne 0 -or $cecWarm.Text -notmatch 'echoed=10000 corrupted=0 lost=0 network_errors=0') { throw 'warmup failed' }
+            if ($cecWarm.Code -ne 0 -or $cecWarm.Text -notmatch ('\bechoed=' + (10000 * [long]$SessionCount) + '\b') -or $cecWarm.Text -notmatch '\bcorrupted=0\b' -or $cecWarm.Text -notmatch '\blost=0\b' -or $cecWarm.Text -notmatch '\bnetwork_errors=0\b' -or $cecWarm.ErrorText.Length -ne 0) { throw 'warmup failed' }
         }
         foreach ($cecIteration in 1..$Iterations) {
             $cecOrder = if ($cecIteration % 2 -eq 1) { @(0,1) } else { @(1,0) }
@@ -46,13 +46,13 @@ foreach ($cecProtocol in $(if ($Transport -eq 'both') { @('tcp','udp') } else { 
                 $cecArgs = if ($EchoCount -eq 0) { $cecCommon + @('/n','0','/w',[string]$Seconds) } else { $cecCommon + @('/n',[string]$EchoCount) }
                 $cecTimeout = if ($EchoCount -eq 0) { ($Seconds+3)*1000 } else { 60000 }
                 $cecRun = Invoke-CECProcess $cecClient.Path $cecArgs $cecTimeout
-                if ($cecRun.Code -ne 0 -or $cecRun.Text -notmatch 'corrupted=0 lost=0 network_errors=0') {
+                if ($cecRun.Code -ne 0 -or $cecRun.Text -notmatch '\bcorrupted=0\b' -or $cecRun.Text -notmatch '\blost=0\b' -or $cecRun.Text -notmatch '\bnetwork_errors=0\b' -or $cecRun.ErrorText.Length -ne 0) {
                     throw "benchmark failure: $($cecClient.Name) $($cecRun.Text) $($cecRun.ErrorText)"
                 }
                 $cecMatch = [regex]::Match($cecRun.Text,'elapsed_ms=(\d+).*echoed=(\d+).*echo_per_sec=([\d.]+).*p99_us~(\d+)')
                 if (-not $cecMatch.Success -or [long]$cecMatch.Groups[2].Value -eq 0) { throw 'benchmark metrics missing' }
                 if ($EchoCount -eq 0 -and [long]$cecMatch.Groups[1].Value -lt $Seconds*1000) { throw 'benchmark duration too short' }
-                if ($EchoCount -ne 0 -and [uint64]$cecMatch.Groups[2].Value -ne $EchoCount) { throw 'benchmark finite quota mismatch' }
+                if ($EchoCount -ne 0 -and [uint64]$cecMatch.Groups[2].Value -ne ([uint64]$EchoCount * [uint64]$SessionCount)) { throw 'benchmark finite quota mismatch' }
                 $cecResults.Add([pscustomobject]@{
                     Protocol=$cecProtocol;Client=$cecClient.Name;Iteration=$cecIteration
                     ElapsedMilliseconds=[long]$cecMatch.Groups[1].Value;Echoed=[long]$cecMatch.Groups[2].Value

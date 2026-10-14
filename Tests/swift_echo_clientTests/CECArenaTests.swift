@@ -5,13 +5,27 @@ import WinSDK
 
 @Suite struct CECArenaTests {
   @Test func independentStorageAndAttemptRanges() {
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 128) == 128)
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 4, batchBytes: 16, memoryLimit: 128) == 128)
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 127) == nil)
-    #expect(cecCheckedSharedStorageBytes(sessions: 0, workers: 1, batchBytes: 16, memoryLimit: 100) == nil)
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 5, batchBytes: 16, memoryLimit: 100) == nil)
-    #expect(cecCheckedSharedStorageBytes(sessions: UInt64.max, workers: 1, batchBytes: 1, memoryLimit: UInt64.max) == nil)
-    #expect(cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: UInt64.max, memoryLimit: UInt64.max) == nil)
+    #expect(
+      cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 128) == 128
+    )
+    #expect(
+      cecCheckedSharedStorageBytes(sessions: 4, workers: 4, batchBytes: 16, memoryLimit: 128) == 128
+    )
+    #expect(
+      cecCheckedSharedStorageBytes(sessions: 4, workers: 1, batchBytes: 16, memoryLimit: 127) == nil
+    )
+    #expect(
+      cecCheckedSharedStorageBytes(sessions: 0, workers: 1, batchBytes: 16, memoryLimit: 100) == nil
+    )
+    #expect(
+      cecCheckedSharedStorageBytes(sessions: 4, workers: 5, batchBytes: 16, memoryLimit: 100) == nil
+    )
+    #expect(
+      cecCheckedSharedStorageBytes(
+        sessions: UInt64.max, workers: 1, batchBytes: 1, memoryLimit: UInt64.max) == nil)
+    #expect(
+      cecCheckedSharedStorageBytes(
+        sessions: 4, workers: 1, batchBytes: UInt64.max, memoryLimit: UInt64.max) == nil)
     #expect(cecAttemptBufferRange(offset: 16, maximumBytes: 16, count: 3) == 16..<19)
     #expect(cecAttemptBufferRange(offset: 0, maximumBytes: 16, count: 0) == 0..<0)
     #expect(cecAttemptBufferRange(offset: -1, maximumBytes: 16, count: 3) == nil)
@@ -29,7 +43,9 @@ import WinSDK
   }
   @Test func viewsAndGuardBytes() throws {
     var arena = CECVirtualArenaOwner(
-      try #require(VirtualAlloc(nil, 64, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))),
+      try #require(
+        VirtualAlloc(
+          nil, 64, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))),
       byteCount: 64)
     let initialized: Void? = arena.withMutableBytes(in: 0..<64) { bytes in
       for i in bytes.indices { bytes[i] = 0xAB }

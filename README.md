@@ -1,12 +1,12 @@
 # swift-echo-client
 
-> 2026-10-14：按用户要求暂停并提交 WIP 审查快照。本轮尚未运行完整格式化、编译和测试门禁；待完成事项见 [暂停交接](docs/REVIEW_CHECKPOINT_2026-10-14.md)，更新规范见 [跨语言规范](docs/CPP_Rust_Zig_Swift_Refactoring_Spec_v2.0.md)。
+> 2026-10-14：已补齐完成区间、有限额度账本、CEC_DIAG_FILE、IOCP 控制顺序、隐式释放 guard 与 pacing timer-resolution owner；当前源码证据见 [源码收尾审查](docs/review/2026-10-14/client-final-source-report.md) 和 [携回补丁核对](docs/review/2026-10-14/client-overlay-source-audit.md)。本轮完整格式化、Release/Debug 门禁仍待执行。此前 [暂停交接](docs/REVIEW_CHECKPOINT_2026-10-14.md) 和 [恢复审查](docs/review/2026-10-14/resume-client-report.md) 保留为历史源码记录，验收依据为 [跨语言规范](docs/CPP_Rust_Zig_Swift_Refactoring_Spec_v2.0.md)。
 
-Swift 6.4 重写的 Windows x64 RIO Echo 压测客户端。参数、TCP/UDP 回显字节、工作线程划分、有限次数认领、停止排空、退出码和统计沿用 C++ 客户端。默认负载为 `echo from <host>`。
+Swift 6 语言模式的 Windows x64 RIO Echo 压测客户端。参数、TCP/UDP 回显字节、工作线程划分、有限次数认领、停止排空、退出码和统计沿用 C++ 客户端。默认负载为 `echo from <host>`。
 
 ## 构建与运行
 
-要求 Windows 10 或更新版本、Swift 6.4 Windows 工具链及配套 Windows SDK、PowerShell 7。无第三方 Swift 包，不依赖相邻客户端或服务端源码。工具链及运行库须在 PATH 中。
+要求 Windows 10 或更新版本、支持本包 Swift 6.4 tools-version 与所有权特性的 Windows 工具链及配套 Windows SDK、PowerShell 7。实际编译器、LLVM、SDK 与优化配置以本轮构建清单为准；Swift 6.4 tools-version 不等于编译器版本。无第三方 Swift 包，不依赖相邻客户端或服务端源码。工具链及运行库须在 PATH 中。
 
 ```powershell
 swift build -c release --product swift-echo-client
@@ -16,9 +16,9 @@ $bin = swift build -c release --show-bin-path
 & "$bin/swift-echo-client.exe" /h
 ```
 
-完整验证依次运行 `format.ps1` → `build_release.ps1` → `build_debug.ps1`（两种构建均含 CTest 与 reset storm）：构建、Swift Testing、所有权编译正反例、源码策略、原生失败边界、TCP/UDP 进程测试、多线程、重连、周期统计、宽字符参数和真实 Ctrl+Break 停止。所有客户端子进程有超时，对端在 finally 中清理。
+完整验证依次运行 `format.ps1` → `build_release.ps1` → `build_debug.ps1`（两种构建均含 SwiftPM 单元测试与 PowerShell 原生门禁、reset storm）：构建、Swift Testing、所有权编译正反例、源码策略、原生失败边界、TCP/UDP 进程测试、多线程、重连、周期统计、宽字符参数和真实 Ctrl+Break 停止。所有客户端子进程有超时，对端在 finally 中清理。
 
-当前 Swift 6.4 Windows 默认构建后端的 Release 测试运行器会遗漏测试 DLL，导致发现零个测试。验证脚本仅在单元测试阶段显式采用 `swift test -c release --build-system native`（Debug 同样采用 native），核心模块与测试均按对应配置编译；正式客户端构建仍使用默认后端。脚本拒绝零测试结果，具体证据见工具链文档。
+历史 Swift 6.4 Windows 环境中，默认构建后端的 Release 测试运行器曾遗漏测试 DLL，导致发现零个测试。验证脚本在单元测试阶段显式采用 `swift test -c release --build-system native`（Debug 同样采用 native），核心模块与测试均按对应配置编译；正式客户端构建仍使用默认后端。脚本拒绝零测试结果，历史证据见工具链文档；本轮实际发现数与结果须重新记录。
 
 ```powershell
 pwsh -NoProfile -File tests/cec_standalone_check.ps1 -Configuration release
@@ -64,13 +64,15 @@ UDP 单包最多 65507 字节，TCP 单批最多 64 MiB。每线程 arena 不超
 
 执行链为 `Transport → Completion/Event → Runtime → Core → Action → Runtime → Transport`。Core／Timer 自己拥有不可复制的固定存储，不依赖 socket、RQ、OVERLAPPED 或 provider outstanding。生产 Runtime 使用静态泛型，测试可替换 Transport 与 Clock，并比较相同事件序列的 Action、状态与账本。批次先提交 receive 再提交 send；部分发送只重发同一批尾部。原生完成先验证 socket context、代际、操作归属、提交长度，再独立核销每类操作；ConnectEx 的 IOCP key 也携带提交代际。
 
-关闭 socket 只发起取消，保留未完成 provider 账本；全部相关 Completion 核销后才能发布 GenerationDrained。第一次 close 启动 QPC 5 秒排空期限，重复 stop 不延长。RIO 通知只核销真实 IOCP 投递，排空允许剩余一个空 arm；先 close CQ 再释放通知。Coordinator 先 Join 全部 worker，再集中检查／快照／释放，release 内部再次检查全部 slot 与聚合计数，包括 never-started owner。开启 /report 时 worker 每 100 ms 经 Mutex 发布快照；停止控制使用 Atomic，业务配额与统计由 worker 独占。
+关闭 socket 只发起取消，保留未完成 provider 账本；全部相关 Completion 核销后才能发布 GenerationDrained。第一次 close 启动 QPC 5 秒排空期限，重复 stop 不延长。RIO 通知只核销真实 IOCP 投递，排空允许剩余一个空 arm；通知 OVERLAPPED 保持固定地址，直到 CQ 与 IOCP 均已关闭才释放。Coordinator 先 Join 全部 worker，再集中检查／快照／释放，显式 release 和聚合对象 deinit 内部均检查原生所有权；已启动 worker 还必须已 Join，原生存储的隐式析构必须先完成句柄关闭与 Buffer ID 注销。到期 timer 仲裁按实际取得的包依次处理：通知完成原有 64 批有界 CQ 服务后才取得下一个包，STOP 取得时立即开始关闭。`/i` 非零时持有 1 ms timer-resolution request 至 run 返回，失败具名为 `timeBeginPeriod(client pacing)` 并退出 4。开启 /report 时 worker 每 100 ms 经 Mutex 发布快照；停止控制使用 Atomic，业务配额与统计由 worker 独占。
 
 错误保留 domain、classification、stage、原始 code、category、retryable；容量准备、连接失败、provider 不变量、排空超时维持独立边界。Native 的强制失败不能被静默全局状态替代。Span／MutableSpan 只在 owner 的同步闭包中借用，原生 provider 另由 completion 生命周期保障。物理 arena 的 TX／RX 分区遵循 Rust／Zig 的 Native 实现差异，仍映射 C++ 的每会话两个独立窗口。
 
 测试驱动覆盖替换 Transport 的顺序记录、未完成 receive／ConnectEx 的真实 5 秒 loop、操作／代际／长度拒绝与正向对照、全 Join 屏障、never-started guard，以及用栈 arena 证明 guard 先于释放。正式 E0、热路径生成代码和性能基线须在统一门禁与冻结二进制清单后另行验收；功能通过不能代表性能零回退。
 
-运行目录须能找到 Swift 6.4 的 `swiftCore.dll`、`swiftWinSDK.dll`、`swiftSynchronization.dll`、`Foundation.dll`、`FoundationEssentials.dll` 及其传递依赖，同时具备 MSVC x64 运行库和 Windows UCRT。最直接的部署方式是安装匹配的 Swift 工具链并保留其运行库 PATH；单拷贝 exe 到没有运行库的机器不能运行。开发测试不需要额外服务，测试脚本使用 .NET 回环对端。
+设置 `CEC_DIAG_FILE` 可在全部 worker Join 与释放检查后、销毁资源前，将通知计数写入指定文件。每个已启动 worker 一行，格式与 C++/Rust 一致：`role=client protocol=tcp|udp worker=N notify_arms=N notify_deliveries=N notify_gap=N timeout_wakeups_while_outstanding=N`。文件采用 UTF-8/ASCII 与 LF，最多 511 个 UTF-16 路径单元；正常残余 arm 的 gap 为 0 或 1。未设置变量或文件打开／写入失败不改变 stdout、stderr 与退出码。有限运行失败时，未认领额度同时加入最终 attempted 与 lost，使终态账本保持平衡。
+
+运行目录须能找到构建工具链配套的 `swiftCore.dll`、`swiftWinSDK.dll`、`swiftSynchronization.dll`、`Foundation.dll`、`FoundationEssentials.dll` 及其传递依赖，同时具备 MSVC x64 运行库和 Windows UCRT。最直接的部署方式是安装匹配的 Swift 工具链并保留其运行库 PATH；单拷贝 exe 到没有运行库的机器不能运行。开发测试不需要额外服务，测试脚本使用 .NET 回环对端。
 
 [工具链与 ABI 证据](docs/toolchain-interop.md)、[兼容差异与限制](docs/behavior-differences.md)、[性能测量](docs/performance.md)、[Swift 6.4 所有权与内存安全优化](docs/optimization.md)。
 

@@ -1,4 +1,5 @@
 // swift-tools-version: 6.4
+
 import PackageDescription
 
 let package = Package(
@@ -12,12 +13,21 @@ let package = Package(
     .target(
       name: "CECClientCore",
       path: "Sources",
-      sources: ["contract.swift", "types.swift", "payload.swift", "metrics.swift", "native.swift", "internal.swift", "engine.swift"],
+      exclude: ["main.swift"],
+      sources: [
+        "contract.swift", "types.swift", "payload.swift", "metrics.swift", "native.swift",
+        "internal.swift", "engine.swift",
+      ],
       swiftSettings: [.strictMemorySafety(), .treatWarning("StrictMemorySafety", as: .error)],
-      linkerSettings: [.linkedLibrary("Ws2_32")]),
+      linkerSettings: [.linkedLibrary("Ws2_32"), .linkedLibrary("Winmm")]),
     .executableTarget(
       name: "swift_echo_client", dependencies: ["CECClientCore"],
-      path: "Sources", sources: ["main.swift"],
+      path: "Sources",
+      exclude: [
+        "contract.swift", "types.swift", "payload.swift", "metrics.swift", "native.swift",
+        "internal.swift", "engine.swift",
+      ],
+      sources: ["main.swift"],
       swiftSettings: [.strictMemorySafety(), .treatWarning("StrictMemorySafety", as: .error)]),
     .executableTarget(
       name: "swift_echo_client_fault_driver", dependencies: ["CECClientCore"],

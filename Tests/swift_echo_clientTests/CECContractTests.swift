@@ -3,7 +3,6 @@ import Testing
 @testable import CECClientCore
 
 func wideArgs(_ values: [String]) -> [[UInt16]] { values.map { Array($0.utf16) } }
-
 @Suite struct CECContractTests {
   @Test func defaults() throws {
     let o = try cecParseOptions(wideArgs(["client", "127.0.0.1", "/p", "tcp"]))
@@ -74,7 +73,9 @@ func wideArgs(_ values: [String]) -> [[UInt16]] { values.map { Array($0.utf16) }
         CECArgumentToken.memoryCapacity
       ),
       // /h suppresses only the mandatory arguments; the budgets still apply.
-      (["/h", "/p", "tcp", "/c", "200", "/threads", "4", "/cq", "64"], CECArgumentToken.cqCapacity),
+      (
+        ["/h", "/p", "tcp", "/c", "200", "/threads", "4", "/cq", "64"], CECArgumentToken.cqCapacity
+      ),
       (["/h", "/d", "x", "/z", "8"], CECArgumentToken.conflictingPayload),
     ]
     for (args, token) in cases {
@@ -114,7 +115,8 @@ func wideArgs(_ values: [String]) -> [[UInt16]] { values.map { Array($0.utf16) }
       for invalid in (low > 0 ? [low - 1] : []) + (high < UInt64.max ? [high + 1] : []) {
         #expect(throws: CECArgumentError.self) {
           try cecParseOptions(
-            wideArgs(["client", "host", "/p", "tcp"] + generous + ["/\(name)", String(invalid), "/h"]))
+            wideArgs(
+              ["client", "host", "/p", "tcp"] + generous + ["/\(name)", String(invalid), "/h"]))
         }
       }
       for valid in [low, high] {

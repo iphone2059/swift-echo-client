@@ -21,7 +21,7 @@ foreach ($protocol in @('tcp','udp')) {
         foreach ($iteration in 1..3) {
             foreach ($client in @(@{Name='cpp';Path=$CppClientPath},@{Name='swift';Path=$SwiftClientPath})) {
                 $r = Invoke-CECProcess $client.Path $args 10000
-                if ($r.Code -ne 0 -or $r.Text -notmatch 'echoed=20000 corrupted=0 lost=0 network_errors=0') { throw "benchmark failure: $($client.Name) $($r.Text) $($r.ErrorText)" }
+                if ($r.Code -ne 0 -or $r.Text -notmatch '\bechoed=80000\b' -or $r.Text -notmatch '\bcorrupted=0\b' -or $r.Text -notmatch '\blost=0\b' -or $r.Text -notmatch '\bnetwork_errors=0\b' -or $r.ErrorText.Length -ne 0) { throw "benchmark failure: $($client.Name) $($r.Text) $($r.ErrorText)" }
                 $m = [regex]::Match($r.Text,'elapsed_ms=(\d+).*echo_per_sec=([\d.]+) MiB_per_sec=([\d.]+) p50_us~(\d+) p99_us~(\d+) p999_us~(\d+) max_us~(\d+)')
                 if (-not $m.Success) { throw 'benchmark metrics missing' }
                 $results.Add([pscustomobject]@{Protocol=$protocol;Client=$client.Name;Iteration=$iteration;ElapsedMilliseconds=[long]$m.Groups[1].Value;EchoPerSecond=[double]::Parse($m.Groups[2].Value,[Globalization.CultureInfo]::InvariantCulture);MiBPerSecond=[double]::Parse($m.Groups[3].Value,[Globalization.CultureInfo]::InvariantCulture);P50Microseconds=[long]$m.Groups[4].Value;P99Microseconds=[long]$m.Groups[5].Value;P999Microseconds=[long]$m.Groups[6].Value;MaxMicroseconds=[long]$m.Groups[7].Value;WallMilliseconds=$r.WallMilliseconds;CPUMilliseconds=$r.CPUMilliseconds;PeakWorkingSetBytes=$r.PeakWorkingSetBytes;Arguments=$args})

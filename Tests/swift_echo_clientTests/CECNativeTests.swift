@@ -31,16 +31,21 @@ import WinSDK
           UnsafeMutableRawPointer($0).assumingMemoryBound(to: CChar.self), &size)
       }
       #expect(status == 0 && value >= 65536)
-      let receiveStatus = withUnsafeMutablePointer(to:&value) {
-        getsockopt(socket.rawValue,SOL_SOCKET,SO_RCVBUF,UnsafeMutableRawPointer($0).assumingMemoryBound(to:CChar.self),&size)
+      let receiveStatus = withUnsafeMutablePointer(to: &value) {
+        getsockopt(
+          socket.rawValue, SOL_SOCKET, SO_RCVBUF,
+          UnsafeMutableRawPointer($0).assumingMemoryBound(to: CChar.self), &size)
       }
       #expect(receiveStatus == 0 && value >= 65536)
       if transport == .tcp {
         // Winsock returns boolean options as one byte on this SDK. Clear the
         // previous integer buffer result before querying it.
-        value = 0; size = 4
-        let noDelayStatus = withUnsafeMutablePointer(to:&value) {
-          getsockopt(socket.rawValue,Int32(IPPROTO_TCP.rawValue),TCP_NODELAY,UnsafeMutableRawPointer($0).assumingMemoryBound(to:CChar.self),&size)
+        value = 0
+        size = 4
+        let noDelayStatus = withUnsafeMutablePointer(to: &value) {
+          getsockopt(
+            socket.rawValue, Int32(IPPROTO_TCP.rawValue), TCP_NODELAY,
+            UnsafeMutableRawPointer($0).assumingMemoryBound(to: CChar.self), &size)
         }
         #expect(noDelayStatus == 0)
         #expect(value == 1)

@@ -1,29 +1,33 @@
-# 与 C++ 基线的差异
+# 当前实现差异与边界
 
-正常协议、字节模式、原始 UTF-16 参数、参数范围及诊断、认领额度、RIO 数据通路、ConnectEx 建连、IOCP 工作线程、重连排空、退出分类和统计字段与基线一致。产品和帮助中的程序名改为 swift-echo-client；服务端未在本次重构中实现。
+本页描述 2026-10-14 源码收尾时的事实。历史 WIP 见 [暂停快照](REVIEW_CHECKPOINT_2026-10-14.md)，2026-10-02 的验证与性能结果保留在 [修复记录](remediation.md)、[优化记录](optimization.md) 和原始测量工件；这些历史结果不构成本轮新源码的验收证据。当前复核及待运行门禁见 [源码收尾审查](review/2026-10-14/client-final-source-report.md)；[恢复审查](review/2026-10-14/resume-client-report.md) 保留为较早的静态证据。
 
-## 所有权与布局
+正常协议、严格 UTF-16 参数、参数诊断优先级、每 Session `/n`、RIO/ConnectEx/IOCP、重连排空、退出分类和统计字段以当前 `echo-binary-contract-v1` 的 C++/Rust/Zig 为目标。帮助程序名为 swift-echo-client。Swift Server 是独立仓库，不由本客户端源码提供。
 
-资源聚合嵌入不可复制 worker，由 CECWorkerOwner 在固定分配中唯一持有。会话和 OVERLAPPED 分别由 CECPinnedStorage 保持固定地址。Session 中只存可复制原生上下文，不拥有 socket；socket 的关闭责任在 UniqueArray 中的 CECSocketOwner。原生字段地址由实际 MemoryLayout 偏移计算，不能把 Swift 临时 inout 地址交给异步 API。
+## 文件、架构与所有权
 
-RIO buffer/CQ owner 保存函数表副本，避免原版函数表裸指针的寿命依赖。共享停止/额度采用 Atomic，快照及协调器事件所有权采用 Mutex；完整引擎没有声明 unchecked Sendable，也不采用 Swift Task/actor 替代原生工作线程。
+生产源码为扁平 Sources 中的八个文件。Package.swift 是 Swift 的真实模块声明例外，对应 Rust lib.rs／Zig root.zig；不创建占位文件。纯 Session/WorkerCore/Timer 位于 internal.swift；RioTransport/RioAdapter、静态泛型 WorkerRuntime 和 Coordinator 位于 engine.swift；原生资源所有者位于 native.swift。执行链为 `Transport → Completion/Event → Runtime → Core → Action → Runtime → Transport`。
 
-## 本轮 RIO 与存储修正
+Worker、provider Slot、通知和注册表使用固定地址 HeapAlloc 存储；Core/Timer 使用不可复制 CECFixedArray。生产 Slot 保存非拥有原生 socket 值，关闭责任由 Transport/worker release 处理，不使用旧版 UniqueArray socket 集合。生产负载直接填入可失败 VirtualAlloc arena；UniqueArray/CECPatternStorage 和全局 CAS quota 辅助类型只供冷路径测试夹具，不参与生产配额处理。
 
-原版在同一个 worker 的多个在途收发中复用整个 arena 的注册 ID。Swift 版本改为每个 session/direction 独立注册，RIO_BUF.Offset 相对该注册区；短发送在自己的前次完成后复用 ID。全部注册在启动线程前建立，关闭 socket、排空、join、关闭 CQ 后才解除注册，最后释放物理内存。
+C++、Rust、Zig 与 Swift 当前均为每 Session 的 TX/RX 窗口独立注册。各窗口有独立物理区域；存储预算是 `2 × sessions × maximumAttemptBytes`，不再使用旧版共享 TX 的 `(sessions + actualWorkers) × maximumAttemptBytes`。Worker 内存份额为 `(总预算 / 总 Session 数) × Worker Session 数`。每批先收后发；部分发送在原 Attempt 的 TX 区间继续尾部，不重新认领 `/n`。
 
-同一 worker 的发送数据只初始化一次并保持只读，各发送 ID 可指向同一物理区；接收区仍互不重叠。实际存储由旧的 `2 × sessions × maximumAttemptBytes` 改为 `(sessions + actualWorkers) × maximumAttemptBytes`。解析阶段不再用旧公式提前拒绝 /memory，最终由引擎按实际线程分配检查。某些原来超过 /memory 的输入现在可以接受；注册 ID 数量为每会话两个，注册元数据开销不属于 /memory。
+业务账本与 Provider 账本独立。Send/Receive/ConnectEx 的完成只核销自己的所有权；代际、SocketContext、操作、提交长度和偏移在核销前验证，损坏的有符号偏移不会先触发算术 trap。关闭 socket 只发起取消；全部相关完成退休后才发布 GenerationDrained。首次 Close 锚定不可延长的 QPC 五秒宽限。
 
-完成统计及 claimed 在 worker 本地累计，有限额度仍用全局 CAS；无限模式不再更新全局 claimed。周期快照可滞后约 100 ms，不保证所有 worker 来自同一时刻，最终统计在 join 后完整汇总。network_errors 记录可恢复错误，独立于终态损坏/丢失分类，原有退出策略保留。
+Coordinator 先 Join 全部已启动线程，再集中检查、快照并释放。每个 worker destroy 内部重复原生 Slot、聚合计数和通知 guard，包括 never-started 与重复 destroy；Worker、Transport、Resources 的隐式 deinit 也分别检查对应的所有权及释放前置条件，不能绕过显式释放边界。先关闭 CQ，再注销全部 Buffer ID，再释放 arena 与 Slot；通知 OVERLAPPED 的固定存储保持到 IOCP 已关闭之后，随后关闭线程句柄。Resources 隐式析构还要求所有依赖句柄、Socket/RQ 和注册先行退休。合法通知 gap 为 0/1，只消费真实 IOCP 通知，不合成 RIONotify 完成。
 
-## 已验证的健壮性修正
+到期 timer 仲裁保留每个已取得 IOCP 包的正常服务顺序。通知完成原有最多 64 批 CQ 服务，STOP 在取得时立即开始关闭；有限包预算与直接 CQ 记录预算仍保留。Startup 先产生正常 Connect/Attempt actions，再观察既有 Stop。`/i` 非零时请求 1 ms timer resolution 并在所有返回路径平衡释放；请求失败保留原始 code，具名 `timeBeginPeriod(client pacing)` 并退出 4。
 
-正常工作线程在处理最后一次完成时，协调器可能已投递停止包。原版通知关闭代码只接受下一个握手包，合法停止包先到会造成退出 4。故障驱动向真实 IOCP 先投递停止包，修复前稳定返回 4，修复后返回 0。Swift 版本在 1 秒总期限内消费这个已无作用的控制包，再验证握手的 key 与 OVERLAPPED；其他不合法包仍 fail-fast。
+## 配额、统计与诊断
 
-最终非受控退出在补未认领额度前检查 claimed = echoed + corrupted + lost。延迟换算和分位秩使用 full-width 整数运算，避免乘法溢出；统计速率显式使用 POSIX locale，保留小数点和两位小数。
+每 Session 独立认领 `/n`，统计由 Worker/Core 本地持有；有限和无限模式均无生产全局 quota CAS。开启 /report 后按 `min(report_seconds * 1000, 50)` 毫秒的间隔通过 Mutex 发布统计（与 Rust/Zig 一致）；周期快照可以滞后且不保证来自同一时刻，最终统计在 Join 后完整合并。
 
-## 分配与环境边界
+输出包含 attempted/pending/echoed/corrupted/lost/cancelled、原生成功发送前缀与接收字节、connections/reconnects/network_errors。有限运行失败的未认领额度同时计入最终 attempted 与 lost；受控 Stop 不补未认领额度。终态要求 `attempted = echoed + corrupted + lost + cancelled` 且 active/pending 为零。损坏、丢失与原生错误分类分别核算，64 桶延迟以完整批次采样，mean 为真实样本均值，max 为最大桶下界。
 
-VirtualAlloc、HeapAlloc、Winsock/RIO/线程/句柄 API 的失败可按原版阶段处理。UniqueArray、Swift 类及 worker 元数据使用标准库分配；真正耗尽这些分配时，Swift 运行库可能终止进程，无法保证映射到原版的可恢复退出码。CECPatternError.allocationFailure 预留给可失败分配实现，目前标准库没有该恢复路径。`/memory` 仅限制注册 arena，不是整个进程内存上限。
+CEC_DIAG_FILE 的行格式、路径限制和文件选项与 C++/Rust 对应。读取所有通知计数发生在 Join/check 后、worker destroy 清除残余 arm 前；每个已启动 Worker 一行。诊断打开或写入失败不改变生产结果。这里描述源码行为，实际正反例和互操作仍需本轮门禁证明。
 
-当前测试环境 DNS 将 .invalid 域名合成为 198.18.1.218；确定性解析失败测试使用格式错误的 IPv4 名称，生产仍直接遵循 GetAddrInfoW 的结果。Windows x64 以外的平台不在此版本范围内。必须提供匹配 Swift 6.4 的动态运行库；不要将 debug 测试库作为生产依赖部署。
+## 分配、工具链与性能边界
+
+Windows x64 是本版本范围。SwiftPM 使用 tools-version 6.4、Swift 6 模式及 StrictMemorySafety；实际编译器/LLVM/SDK/运行库身份以新构建清单为准，不能用历史 Swift 6.4 Release 数据代替当前快照。
+
+VirtualAlloc、HeapAlloc、Winsock/RIO/线程/句柄 API 的失败按具名边界处理。Swift 的控制/发布对象、CLI 容器、字符串输出与冷路径诊断仍使用运行库分配，极端 OOM 不保证具有可恢复的标准库接口。`/memory` 只限制注册 arena，不是进程总内存上限。热路径没有新增动态 protocol existential、Task/Actor 或每完成堆分配；生成代码、ARC 与正式性能结论须在冻结产物后验证，不由静态结构推断。

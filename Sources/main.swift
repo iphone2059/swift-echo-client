@@ -2,6 +2,8 @@ import CECClientCore
 import Foundation
 import WinSDK
 
+// Top-level entry: main.swift holds the entry point so the file corresponds to main.cpp, main.rs
+// and main.zig in the sibling implementations.
 struct SwiftEchoClient {
   static func writeUsage(_ handle: FileHandle) {
     handle.write(Data(cecUsageText.utf8))
@@ -38,7 +40,4 @@ struct SwiftEchoClient {
     }
   }
 }
-
-// Top-level entry: main.swift holds the entry point so the file corresponds to main.cpp, main.rs
-// and main.zig in the sibling implementations.
 ExitProcess(UInt32(SwiftEchoClient.run().rawValue))

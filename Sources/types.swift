@@ -1,3 +1,4 @@
+/// Strict UTF-16 byte sizing, used before allocation. No replacement characters are accepted.
 package enum CECTransport: UInt8, Sendable { case none, tcp, udp }
 package enum CECPatternKind: UInt8, Sendable {
   case defaultText, literalText, binaryCounter, printableCounter
@@ -11,18 +12,25 @@ package enum CECEngineOperation: UInt8, Sendable {
 package enum CECCompletionFailureStage: UInt8 { case completion, sendPost }
 package enum CECWorkerPhase: UInt8, Sendable { case starting, running, draining, stopped }
 package enum CECFailureClass: UInt8, Sendable { case network, invariant, drainTimeout }
-package enum CECFailureDomain: UInt8, Sendable { case win32, winsock, allocation, capacity, invariant }
-package enum CECFailureCategory: UInt8, Sendable { case initialization, connection, provider, invariant }
+package enum CECFailureDomain: UInt8, Sendable {
+  case win32, winsock, allocation, capacity, invariant
+}
+package enum CECFailureCategory: UInt8, Sendable {
+  case initialization, connection, provider, invariant
+}
 package struct CECFailure: Error, Sendable, Equatable {
   package let classification: CECFailureClass
   package let domain: CECFailureDomain
-  package let stage: String
+  // A failure stage is a compile-time literal in every producer, so it is stored
+  // without a bridged object: the pure Core and the transport never retain or
+  // release a stage while classifying events (Rust &'static str / Zig comptime).
+  package let stage: StaticString
   package let code: Int32
   package let category: CECFailureCategory
   package let retryable: Bool
 
   package init(
-    classification: CECFailureClass, domain: CECFailureDomain, stage: String, code: Int32,
+    classification: CECFailureClass, domain: CECFailureDomain, stage: StaticString, code: Int32,
     category: CECFailureCategory = .initialization, retryable: Bool = false
   ) {
     self.classification = classification
@@ -33,16 +41,25 @@ package struct CECFailure: Error, Sendable, Equatable {
     self.retryable = retryable
   }
 
-  package static func allocation(stage: String) -> Self {
+  package static func allocation(stage: StaticString) -> Self {
     Self(classification: .network, domain: .allocation, stage: stage, code: 8)
   }
-  package static func invariant(stage: String) -> Self {
-    Self(classification: .invariant, domain: .invariant, stage: stage, code: 13,
+  package static func invariant(stage: StaticString) -> Self {
+    Self(
+      classification: .invariant, domain: .invariant, stage: stage, code: 13,
       category: .invariant)
   }
-  package static func timeout(stage: String) -> Self {
-    Self(classification: .drainTimeout, domain: .win32, stage: stage, code: 1460,
+  package static func timeout(stage: StaticString) -> Self {
+    Self(
+      classification: .drainTimeout, domain: .win32, stage: stage, code: 1460,
       category: .invariant)
+  }
+  // StaticString is not Equatable in this toolchain, so the stage is compared as text.
+  // The comparison is cold: it only runs in tests and failure assertions.
+  package static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.classification == rhs.classification && lhs.domain == rhs.domain
+      && lhs.code == rhs.code && lhs.category == rhs.category && lhs.retryable == rhs.retryable
+      && String(describing: lhs.stage) == String(describing: rhs.stage)
   }
 }
 package struct CECArgumentError: Error, Equatable { package let message: String }
@@ -71,7 +88,6 @@ package struct CECOptions: Sendable {
   package var stats = false
   package var help = false
 }
-
 package enum CECConstants {
   package static let contractVersion = "echo-binary-contract-v1"
   package static let hostCapacity = 256
@@ -87,8 +103,6 @@ package enum CECConstants {
   package static let completionBatchSize = 256
   package static let stopKey: UInt = 1
 }
-
-/// Strict UTF-16 byte sizing, used before allocation. No replacement characters are accepted.
 package func cecUTF8ByteCount(_ units: borrowing [UInt16]) -> UInt64? {
   var result: UInt64 = 0
   var index = 0
@@ -113,4 +127,3 @@ package func cecUTF8ByteCount(_ units: borrowing [UInt16]) -> UInt64? {
   }
   return result
 }
-

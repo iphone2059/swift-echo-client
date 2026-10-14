@@ -23,9 +23,11 @@ private func stateWorker(
       metrics: CECEngineMetrics(), control: CECSharedControl(), workerIndex: 0, sessionCount: 1,
       memoryShare: 8))
   let w = owner.baseAddress
-  w.pointee.core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+  w.pointee.core = try CECWorkerCore(
+    options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
   guard let storage = CECPinnedStorage(count: 1, initialValue: CECEngineSession()),
-    let memory = VirtualAlloc(nil, 4096, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))
+    let memory = VirtualAlloc(
+      nil, 4096, DWORD(UInt32(MEM_RESERVE) | UInt32(MEM_COMMIT)), DWORD(UInt32(PAGE_READWRITE)))
   else { throw AllocationError() }
   w.pointee.sessionAddress = storage.baseAddress
   let first = UInt(bitPattern: storage.baseAddress)
@@ -40,20 +42,20 @@ private func stateWorker(
   w.pointee.core.sessions[0].attemptBytes = 4
   w.pointee.core.sessions[0].requestedEchoes = 1
   s.pointee.sendOutstanding = true
-    s.pointee.receiveOutstanding = true
-    s.pointee.generation = 1
-    s.pointee.sendPostedBytes = w.pointee.core.sessions[0].attemptBytes
-    s.pointee.receivePostedBytes = w.pointee.core.sessions[0].attemptBytes
-    w.pointee.transport.totalOutstanding = 2
-    w.pointee.transport.rioOutstanding = 2
-    w.pointee.transport.notificationArmed = true
-    w.pointee.transport.notifyArms = 1
-    w.pointee.core.sessions[0].claimed = 1
-    w.pointee.core.sessions[0].attemptAccounted = false
-    w.pointee.core.sessions[0].receivePosted = true
-    w.pointee.core.sessions[0].activeCounted = true
-    w.pointee.core.metrics.claimed = 1
-    w.pointee.core.metrics.active = 1
+  s.pointee.receiveOutstanding = true
+  s.pointee.generation = 1
+  s.pointee.sendPostedBytes = w.pointee.core.sessions[0].attemptBytes
+  s.pointee.receivePostedBytes = w.pointee.core.sessions[0].attemptBytes
+  w.pointee.transport.totalOutstanding = 2
+  w.pointee.transport.rioOutstanding = 2
+  w.pointee.transport.notificationArmed = true
+  w.pointee.transport.notifyArms = 1
+  w.pointee.core.sessions[0].claimed = 1
+  w.pointee.core.sessions[0].attemptAccounted = false
+  w.pointee.core.sessions[0].receivePosted = true
+  w.pointee.core.sessions[0].activeCounted = true
+  w.pointee.core.metrics.claimed = 1
+  w.pointee.core.metrics.active = 1
   QueryPerformanceFrequency(&w.pointee.performanceFrequency)
   w.pointee.metrics.claimed = 1
   for i in 0..<4 {
@@ -77,7 +79,9 @@ private func stateWorker(
     send.SocketContext = UInt64(UInt(bitPattern: s))
     send.BytesTransferred = 2
     cecProcessRIOResult(w, result: send)
-    #expect(s.pointee.sendOffset == 2 && s.pointee.outstanding == 2 && !w.pointee.core.sessions[0].sendDone)
+    #expect(
+      s.pointee.sendOffset == 2 && s.pointee.outstanding == 2
+        && !w.pointee.core.sessions[0].sendDone)
     #expect(sentContinuation.withLock { $0.0 == 2 && $0.1 == 2 })
     cecProcessRIOResult(w, result: send)
     var receive = RIORESULT()
@@ -90,7 +94,7 @@ private func stateWorker(
         && w.pointee.metrics.lost == 0)
     _ = w.pointee.timers.remove(sessionIndex: 0)
   }
-  @Test func TCPShortAndCloseOnlyDrain() throws {
+  @Test func tcpShortAndCloseOnlyDrain() throws {
     let owner = try stateWorker(transport: .tcp)
     let w = owner.baseAddress
     let s = w.pointee.sessionAddress!
@@ -105,7 +109,9 @@ private func stateWorker(
     send.SocketContext = UInt64(UInt(bitPattern: s))
     send.Status = 995
     cecProcessRIOResult(w, result: send)
-    #expect(w.pointee.core.sessions[0].state == .done && s.pointee.outstanding == 0 && w.pointee.liveSessions == 0)
+    #expect(
+      w.pointee.core.sessions[0].state == .done && s.pointee.outstanding == 0
+        && w.pointee.liveSessions == 0)
     #expect(
       w.pointee.metrics.lost == 1
         && w.pointee.metrics.networkErrors == 1)

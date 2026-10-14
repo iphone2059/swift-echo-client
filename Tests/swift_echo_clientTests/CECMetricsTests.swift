@@ -5,6 +5,18 @@ import ucrt
 @testable import CECClientCore
 
 @Suite struct CECMetricsTests {
+  @Test func notificationDiagnosticsMatchSharedSchema() {
+    let snapshot = CECNotificationSnapshot(
+      workerIndex: 3, arms: 9, deliveries: 8, timeoutWakeups: 0)
+    #expect(
+      cecNotificationDiagnosticLine(snapshot, transport: .tcp)
+        == "role=client protocol=tcp worker=3 notify_arms=9 notify_deliveries=8 notify_gap=1 timeout_wakeups_while_outstanding=0\n"
+    )
+    #expect(
+      cecNotificationDiagnosticLine(snapshot, transport: .udp)
+        == "role=client protocol=udp worker=3 notify_arms=9 notify_deliveries=8 notify_gap=1 timeout_wakeups_while_outstanding=0\n"
+    )
+  }
   @Test func claimsAndPercentiles() async {
     let m = CECEngineMetrics()
     m.claimed.store(7, ordering: .relaxed)
@@ -64,17 +76,28 @@ import ucrt
     #expect(cecClaimAttempts(metrics: quota, limit: 0, requested: 0) == 0)
     #expect(quota.claimed.load(ordering: .relaxed) == 99)
     var first = CECWorkerMetricsSnapshot()
-    first.claimed = 8; first.echoed = 6; first.corrupted = 1; first.lost = 1
-    first.bytes = 24; first.networkErrors = 1; first.latencyBins[0] = 2
+    first.claimed = 8
+    first.echoed = 6
+    first.corrupted = 1
+    first.lost = 1
+    first.bytes = 24
+    first.networkErrors = 1
+    first.latencyBins[0] = 2
     var second = CECWorkerMetricsSnapshot()
-    second.claimed = 3; second.echoed = 2; second.lost = 1
-    second.bytes = 8; second.networkErrors = 1; second.latencyBins[63] = 1
+    second.claimed = 3
+    second.echoed = 2
+    second.lost = 1
+    second.bytes = 8
+    second.networkErrors = 1
+    second.latencyBins[63] = 1
     let result = cecMergeMetrics([first, second])
     #expect(result.claimed == 11 && result.echoed == 8 && result.corrupted == 1 && result.lost == 2)
     #expect(result.bytes == 32 && result.networkErrors == 2)
     #expect(result.latencyBins[0] == 2 && result.latencyBins[63] == 1)
-    #expect(cecSessionTerminalAccountingValid(
-      claimed: result.claimed, echoed: result.echoed, corrupted: result.corrupted, lost: result.lost))
+    #expect(
+      cecSessionTerminalAccountingValid(
+        claimed: result.claimed, echoed: result.echoed, corrupted: result.corrupted,
+        lost: result.lost))
   }
   @Test func snapshotPublicationIsCoherent() async {
     let publication = CECWorkerPublication()
@@ -82,7 +105,9 @@ import ucrt
       group.addTask {
         for i: UInt64 in 1...10_000 {
           var value = CECWorkerMetricsSnapshot()
-          value.claimed = i; value.echoed = i; value.bytes = i * 4
+          value.claimed = i
+          value.echoed = i
+          value.bytes = i * 4
           value.latencyBins[0] = i
           publication.publish(value)
         }
@@ -105,7 +130,8 @@ import ucrt
   @Test func mergePreservesWrappingAndAllBins() {
     var first = CECWorkerMetricsSnapshot()
     var second = CECWorkerMetricsSnapshot()
-    first.bytes = UInt64.max; second.bytes = 1
+    first.bytes = UInt64.max
+    second.bytes = 1
     for i in 0..<64 {
       first.latencyBins[i] = UInt64.max
       second.latencyBins[i] = UInt64(i + 1)

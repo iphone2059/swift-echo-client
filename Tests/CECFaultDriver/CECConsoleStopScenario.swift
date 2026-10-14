@@ -1,7 +1,7 @@
 import CECClientCore
+/// Runs a hidden console child so generating Ctrl+Break cannot affect the caller's console.
 import WinSDK
 
-/// Runs a hidden console child so generating Ctrl+Break cannot affect the caller's console.
 func cecExerciseConsoleStop(clientPath: String, port: UInt16, readyName: String)
   -> CECExitCode
 {
@@ -22,7 +22,7 @@ func cecExerciseConsoleStop(clientPath: String, port: UInt16, readyName: String)
   }
   let processOwner = CECHandleOwner(process)
   let threadOwner = CECHandleOwner(info.hThread)
-  func failChild(_ stage: String, _ error: Int32) -> Never {
+  func failChild(_ stage: StaticString, _ error: Int32) -> Never {
     TerminateProcess(process, 4)
     WaitForSingleObject(process, 5000)
     cecFailFast(stage: stage, error: error)

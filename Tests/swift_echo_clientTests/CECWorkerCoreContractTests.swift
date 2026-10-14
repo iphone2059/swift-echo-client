@@ -8,7 +8,8 @@ import Testing
     options.transport = .tcp
     options.echoCount = 5
     options.pipelineDepth = 4
-    var core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+    var core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
     let start = core.start(now: 0)
     #expect(start.count == 1)
     let connected = core.onEvent(.connected(0), now: 1)
@@ -25,7 +26,8 @@ import Testing
     options.transport = .tcp
     options.echoCount = 4
     options.pipelineDepth = 4
-    var core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+    var core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
     _ = core.start(now: 0)
     _ = core.onEvent(.connected(0), now: 1)
     _ = core.onEvent(.received(index: 0, bytes: 16, equal: true), now: 2)
@@ -39,7 +41,8 @@ import Testing
     var options = CECOptions()
     options.transport = .tcp
     options.reconnectSeconds = 2
-    var core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+    var core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
     _ = core.start(now: 0)
     _ = core.onEvent(.transportFailure(0), now: 100)
     #expect(core.sessions[0].state == .closing)
@@ -51,7 +54,8 @@ import Testing
   @Test func closingKeepsFirstDrainDeadlineAcrossRepeatedStop() throws {
     var options = CECOptions()
     options.transport = .tcp
-    var core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+    var core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
     _ = core.start(now: 0)
     _ = core.onEvent(.connected(0), now: 1)
     _ = core.onEvent(.transportFailure(0), now: 100)
@@ -67,7 +71,8 @@ import Testing
     var options = CECOptions()
     options.transport = .tcp
     options.pipelineDepth = 4
-    var core = try CECWorkerCore(options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
+    var core = try CECWorkerCore(
+      options: options, sessionCount: 1, payloadBytes: 4, frequency: 1000)
     _ = core.start(now: 0)
     _ = core.onEvent(.connected(0), now: 1)
     core.stopping = true

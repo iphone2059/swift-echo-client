@@ -15,14 +15,14 @@ private struct RegistrationTrace: Sendable {
   var memoryAliveAtRelease = true
 }
 private let registrationTrace = Mutex(RegistrationTrace())
-
 @Suite(.serialized) struct CECRegistrationTests {
   @Test func preparedWorkerReleasesCQBeforeWindowsAndArena() throws {
     registrationTrace.withLock { $0 = RegistrationTrace(failAt: 100) }
     var rio = RIO_EXTENSION_FUNCTION_TABLE()
     rio.RIORegisterBuffer = { pointer, length in
       registrationTrace.withLock { trace in
-        trace.regions.append(UInt(bitPattern: pointer)); trace.lengths.append(length)
+        trace.regions.append(UInt(bitPattern: pointer))
+        trace.lengths.append(length)
         return RIO_BUFFERID(bitPattern: trace.regions.count)
       }
     }
@@ -40,14 +40,20 @@ private let registrationTrace = Mutex(RegistrationTrace())
         trace.releaseOrderValid = trace.releaseOrderValid && trace.queueClosed
         var info = MEMORY_BASIC_INFORMATION()
         let address = UnsafeRawPointer(bitPattern: trace.regions[Int(UInt(bitPattern: id)) - 1])
-        trace.memoryAliveAtRelease = trace.memoryAliveAtRelease && VirtualQuery(address, &info, UInt64(MemoryLayout<MEMORY_BASIC_INFORMATION>.size)) != 0 && info.State == DWORD(UInt32(MEM_COMMIT))
+        trace.memoryAliveAtRelease =
+          trace.memoryAliveAtRelease
+          && VirtualQuery(address, &info, UInt64(MemoryLayout<MEMORY_BASIC_INFORMATION>.size)) != 0
+          && info.State == DWORD(UInt32(MEM_COMMIT))
       }
     }
-    var pattern = UniqueArray<UInt8>(); pattern.append(42)
-    let owner = CECWorkerOwner(configuration: CECWorkerConfiguration(options: CECOptions(), remoteAddress: SOCKADDR_IN(),
-      extensions: CECNativeExtensions(rio: rio), pattern: CECPatternStorage(consume pattern),
-      maximumAttemptBytes: 16, metrics: CECEngineMetrics(), control: CECSharedControl(),
-      workerIndex: 0, sessionCount: 2, memoryShare: 64))
+    var pattern = UniqueArray<UInt8>()
+    pattern.append(42)
+    let owner = CECWorkerOwner(
+      configuration: CECWorkerConfiguration(
+        options: CECOptions(), remoteAddress: SOCKADDR_IN(),
+        extensions: CECNativeExtensions(rio: rio), pattern: CECPatternStorage(consume pattern),
+        maximumAttemptBytes: 16, metrics: CECEngineMetrics(), control: CECSharedControl(),
+        workerIndex: 0, sessionCount: 2, memoryShare: 64))
     try cecPrepareWorker(owner.baseAddress)
     #expect(owner.baseAddress.pointee.resources.registeredCount == 4)
     #expect(registrationTrace.withLock { $0.queueCreated && !$0.queueClosed })
@@ -83,7 +89,8 @@ private let registrationTrace = Mutex(RegistrationTrace())
           trace.releaseOrderValid = trace.releaseOrderValid && !trace.queueClosed
           var info = MEMORY_BASIC_INFORMATION()
           let address = UnsafeRawPointer(bitPattern: trace.regions[Int(id) - 1])
-          let queried = VirtualQuery(address, &info, UInt64(MemoryLayout<MEMORY_BASIC_INFORMATION>.size))
+          let queried = VirtualQuery(
+            address, &info, UInt64(MemoryLayout<MEMORY_BASIC_INFORMATION>.size))
           trace.memoryAliveAtRelease =
             trace.memoryAliveAtRelease && queried != 0 && info.State == DWORD(UInt32(MEM_COMMIT))
         }
@@ -93,13 +100,17 @@ private let registrationTrace = Mutex(RegistrationTrace())
         registrationTrace.withLock { $0.queueClosed = true }
       }
       var bytes = UniqueArray<UInt8>()
-      bytes.append(1); bytes.append(0); bytes.append(2); bytes.append(3)
-      let owner = CECWorkerOwner(configuration: CECWorkerConfiguration(
-        options: CECOptions(), remoteAddress: SOCKADDR_IN(),
-        extensions: CECNativeExtensions(rio: rio, connectEx: nil),
-        pattern: CECPatternStorage(consume bytes), maximumAttemptBytes: 16,
-        metrics: CECEngineMetrics(), control: CECSharedControl(), workerIndex: 0,
-        sessionCount: 3, memoryShare: 96))
+      bytes.append(1)
+      bytes.append(0)
+      bytes.append(2)
+      bytes.append(3)
+      let owner = CECWorkerOwner(
+        configuration: CECWorkerConfiguration(
+          options: CECOptions(), remoteAddress: SOCKADDR_IN(),
+          extensions: CECNativeExtensions(rio: rio, connectEx: nil),
+          pattern: CECPatternStorage(consume bytes), maximumAttemptBytes: 16,
+          metrics: CECEngineMetrics(), control: CECSharedControl(), workerIndex: 0,
+          sessionCount: 3, memoryShare: 96))
       let w = owner.baseAddress
       #expect(!cecInitializeWorker(w))
       #expect(w.pointee.resources.thread.rawValue == nil)
@@ -108,7 +119,9 @@ private let registrationTrace = Mutex(RegistrationTrace())
       let first = UInt(bitPattern: w.pointee.memory)
       let trace = registrationTrace.withLock { $0 }
       for i in trace.regions.indices {
-        #expect(trace.regions[i] == first + (i.isMultiple(of: 2) ? UInt((i / 2) * 16) : UInt(48 + (i / 2) * 16)))
+        #expect(
+          trace.regions[i] == first
+            + (i.isMultiple(of: 2) ? UInt((i / 2) * 16) : UInt(48 + (i / 2) * 16)))
         #expect(trace.lengths[i] == 16)
       }
       for i in 0..<(failAt - 1) / 2 {
@@ -117,9 +130,10 @@ private let registrationTrace = Mutex(RegistrationTrace())
         #expect(UInt(bitPattern: s.pointee.receiveBuffer.BufferId) == UInt(i * 2 + 2))
         #expect(s.pointee.sendArenaOffset == i * 16 && s.pointee.receiveArenaOffset == 48 + i * 16)
       }
-      #expect(w.pointee.resources.arena.withBytes(in: 0..<16) { view in
-        (0..<16).allSatisfy { view[$0] == [UInt8(1), 0, 2, 3][$0 % 4] }
-      } == true)
+      #expect(
+        w.pointee.resources.arena.withBytes(in: 0..<16) { view in
+          (0..<16).allSatisfy { view[$0] == [UInt8(1), 0, 2, 3][$0 % 4] }
+        } == true)
       cecDestroyWorker(w)
       cecDestroyWorker(w)
       let released = registrationTrace.withLock { $0 }
