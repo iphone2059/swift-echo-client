@@ -217,11 +217,11 @@ package struct CECEngineWorker: ~Copyable {
       else {
         cecFailFast(stage: "client worker release precondition", error: 5023)
       }
-      #if DEBUG
-        if unsafe transport.notifyTimeoutWakeups != 0 {
-          cecFailFast(stage: "client notification starvation", error: 5023)
-        }
-      #endif
+      // Notification ownership is an invariant in every build, not a diagnostic: a queue that was
+      // armed for work which then never produced a delivery is a defect in release too.
+      if unsafe transport.notifyTimeoutWakeups != 0 {
+        cecFailFast(stage: "client notification starvation", error: 5023)
+      }
     }
   }
   deinit { unsafe requireRelease() }
