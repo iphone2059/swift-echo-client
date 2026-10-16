@@ -8,6 +8,8 @@ private struct DrainTrace: Sendable {
   var worker: UInt = 0
   var calls = 0
   var fatal = false
+  var scratch: UInt = 0
+  var scratchPreserved = true
 }
 private let drainTrace = Mutex(DrainTrace())
 private struct ArbitrationTrace: Sendable {
@@ -295,6 +297,10 @@ private let arbitrationTrace = Mutex(ArbitrationTrace())
     rio.RIODequeueCompletion = { _, results, capacity in
       drainTrace.withLock { trace in
         trace.calls += 1
+        trace.scratchPreserved =
+          trace.scratchPreserved
+          && UInt(bitPattern: results) == trace.scratch
+          && capacity == 256 && results![255].Status == 1234
         let w = UnsafeMutablePointer<CECEngineWorker>(bitPattern: trace.worker)!
         let s = w.pointee.sessionAddress!
         // Bound a broken implementation instead of hanging the test runner.
@@ -379,13 +385,22 @@ private let arbitrationTrace = Mutex(ArbitrationTrace())
     w.pointee.core.sessions[0].attemptBytes = 1
     s.pointee.receiveArenaOffset = 1
 
-    drainTrace.withLock { $0 = DrainTrace(worker: UInt(bitPattern: w), fatal: fatal) }
+    // A provider owns only its returned prefix. The untouched tail must survive both
+    // individual batches and separate drains in the same stable worker allocation.
+    w.pointee.transport.completionResults[255].Status = 1234
+    let scratch = withUnsafeMutablePointer(to: &w.pointee.transport.completionResults) {
+      UInt(bitPattern: $0)
+    }
+    drainTrace.withLock {
+      $0 = DrainTrace(worker: UInt(bitPattern: w), fatal: fatal, scratch: scratch)
+    }
     cecDrainCompletions(w)
     #expect(drainTrace.withLock { $0.calls } == 64)
     #expect(w.pointee.stopping && w.pointee.liveSessions == 1 && s.pointee.outstanding == 2)
     #expect(w.pointee.core.sessions[0].state == .closing)
     cecDrainCompletions(w)
     #expect(drainTrace.withLock { $0.calls } == 66)
+    #expect(drainTrace.withLock { $0.scratchPreserved })
     #expect(w.pointee.stopping && w.pointee.liveSessions == 0)
     #expect(s.pointee.outstanding == 0 && w.pointee.core.sessions[0].state == .done)
     #expect(w.pointee.metrics.echoed == 64 && w.pointee.metrics.claimed == 65)

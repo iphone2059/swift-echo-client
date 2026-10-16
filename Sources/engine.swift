@@ -95,6 +95,8 @@ package struct CECEngineWorkerResources: ~Copyable {
 @unsafe
 package struct CECRioTransport: ~Copyable {
   package var resources = unsafe CECEngineWorkerResources()
+  // Initialized once with the transport; only this worker drains into the returned prefix.
+  package var completionResults = InlineArray<256, RIORESULT>(repeating: RIORESULT())
   package var sessionAddress: UnsafeMutablePointer<CECEngineSession>?
   package var notificationAddress: UnsafeMutablePointer<OVERLAPPED>?
   package var memory: UnsafeMutablePointer<UInt8>?
@@ -107,6 +109,20 @@ package struct CECRioTransport: ~Copyable {
   package var notifyDeliveries: UInt64 = 0
   package var notifyTimeoutWakeups: UInt64 = 0
   package init() {}
+  package mutating func dequeue(
+    _ function: LPFN_RIODEQUEUECOMPLETION, requested: UInt32
+  ) -> UInt32 {
+    guard requested > 0 && requested <= 256 else {
+      cecFailFast(stage: "client RIO dequeue extent", error: 13)
+    }
+    let queue = unsafe resources.completionQueue.rawValue
+    // The inout self access owns this span for the entire synchronous provider call.
+    var view = unsafe completionResults.mutableSpan
+    return view.withUnsafeMutableBufferPointer {
+      unsafe cecRequireValidDequeueCount(
+        function(queue, $0.baseAddress, requested), stage: "RIODequeueCompletion(client)")
+    }
+  }
   package borrowing func requireRelease() {
     unsafe resources.requireProviderRelease()
     if let address = unsafe sessionAddress {
@@ -760,17 +776,13 @@ private func withRuntime<R>(
 private func drainBatch(
   _ runtime: inout CECWorkerRuntime<CECRioAdapter, CECNativeClock>, requested: UInt32 = 256
 ) -> UInt32 {
-  var results = InlineArray<256, RIORESULT>(repeating: RIORESULT())
-  var view = results.mutableSpan
-  let count = view.withUnsafeMutableBufferPointer {
-    unsafe cecRequireValidDequeueCount(
-      runtime.transport.configuration.pointee.extensions.rio.RIODequeueCompletion!(
-        runtime.transport.native.pointee.resources.completionQueue.rawValue, $0.baseAddress,
-        requested), stage: "RIODequeueCompletion(client)")
-  }
+  let native = unsafe runtime.transport.native
+  let function = unsafe runtime.transport.configuration.pointee.extensions.rio.RIODequeueCompletion!
+  let count = unsafe native.pointee.dequeue(function, requested: requested)
   guard count <= requested else { cecFailFast(stage: "client RIO dequeue extent", error: 13) }
   for index in 0..<Int(count) {
-    if let completion = unsafe runtime.transport.retireRio(results[index]) {
+    let result = unsafe runtime.transport.native.pointee.completionResults[index]
+    if let completion = unsafe runtime.transport.retireRio(result) {
       unsafe runtime.handleCompletion(completion)
     }
   }
@@ -893,6 +905,8 @@ package func cecWorkerThread(_ parameter: UnsafeMutableRawPointer?) -> DWORD {
   }
   return unsafe cecRunWorker(parameter.assumingMemoryBound(to: CECEngineWorker.self))
 }
+// Preserve an auditable worker-loop boundary; this call occurs once per native thread.
+@inline(never)
 private func cecRunWorker(_ worker: UnsafeMutablePointer<CECEngineWorker>) -> DWORD {
   unsafe worker.pointee.phase = .running
   return unsafe withRuntime(worker) { runtime in
